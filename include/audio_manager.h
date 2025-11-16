@@ -2,7 +2,13 @@
 #define AUDIO_MANAGER_H
 
 #include <Arduino.h>
+
+// ESP8266 and ESP32 use different SPIFFS headers
+#ifdef ESP8266
+#include <FS.h>
+#else
 #include <SPIFFS.h>
+#endif
 
 #include "AudioFileSourceID3.h"
 #include "AudioFileSourceSPIFFS.h"

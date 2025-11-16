@@ -42,11 +42,18 @@ bool AudioManager::begin() {
 
   Serial.println("[Audio] Initializing SPIFFS...");
 
-  // Initialize SPIFFS
+// Initialize SPIFFS (ESP8266 doesn't use the 'true' parameter)
+#ifdef ESP8266
+  if (!SPIFFS.begin()) {
+    Serial.println("[Audio] SPIFFS Mount Failed");
+    return false;
+  }
+#else
   if (!SPIFFS.begin(true)) {
     Serial.println("[Audio] SPIFFS Mount Failed");
     return false;
   }
+#endif
 
   Serial.println("[Audio] SPIFFS mounted successfully");
   printSPIFFSInfo();
@@ -87,11 +94,18 @@ bool AudioManager::playFile(const char* filename) {
   // Stop any currently playing audio
   stop();
 
-  // Check if file exists
+// Check if file exists
+#ifdef ESP8266
   if (!SPIFFS.exists(filename)) {
     Serial.printf("[Audio] File not found: %s\n", filename);
     return false;
   }
+#else
+  if (!SPIFFS.exists(filename)) {
+    Serial.printf("[Audio] File not found: %s\n", filename);
+    return false;
+  }
+#endif
 
   // Determine file type by extension
   String fname = String(filename);
@@ -210,9 +224,20 @@ void AudioManager::listFiles() {
   Serial.println("[Audio] Files in SPIFFS:");
   Serial.println("----------------------------------------");
 
+#ifdef ESP8266
+  Dir dir = SPIFFS.openDir("/");
+  int count = 0;
+  while (dir.next()) {
+    String filename = dir.fileName();
+    if (filename.endsWith(".wav") || filename.endsWith(".mp3") ||
+        filename.endsWith(".WAV") || filename.endsWith(".MP3")) {
+      Serial.printf("  %s (%d bytes)\n", filename.c_str(), dir.fileSize());
+      count++;
+    }
+  }
+#else
   File root = SPIFFS.open("/");
   File file = root.openNextFile();
-
   int count = 0;
   while (file) {
     if (!file.isDirectory()) {
@@ -225,6 +250,7 @@ void AudioManager::listFiles() {
     }
     file = root.openNextFile();
   }
+#endif
 
   if (count == 0) {
     Serial.println("  No audio files found");
@@ -235,8 +261,15 @@ void AudioManager::listFiles() {
 }
 
 void AudioManager::printSPIFFSInfo() {
+#ifdef ESP8266
+  FSInfo fs_info;
+  SPIFFS.info(fs_info);
+  size_t totalBytes = fs_info.totalBytes;
+  size_t usedBytes = fs_info.usedBytes;
+#else
   size_t totalBytes = SPIFFS.totalBytes();
   size_t usedBytes = SPIFFS.usedBytes();
+#endif
 
   Serial.println("[Audio] SPIFFS Info:");
   Serial.printf("  Total: %d bytes (%.2f MB)\n", totalBytes,

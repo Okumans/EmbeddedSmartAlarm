@@ -17,19 +17,8 @@
 // Configuration
 // ============================================================================
 
-// WiFi Configuration
-const char* WIFI_SSID = "Pleaseconnecttome";
-const char* WIFI_PASSWORD = "n1234567!";
-
-// Soft Access Point Configuration (for ESP-NOW communication)
-const char* SOFT_AP_SSID = "SmartAlarm-Gateway";
-const char* SOFT_AP_PASSWORD = "12345678";
-#define WIFI_CHANNEL 6  // Fixed WiFi channel for ESP-NOW
-
-// MQTT Configuration
-const char* MQTT_SERVER = "broker.hivemq.com";  // Change to your MQTT broker
-const int MQTT_PORT = 1883;
-const char* MQTT_CLIENT_ID = "SmartAlarmClock";
+// Centralized configuration
+#include "../../include/config.h"
 
 // MQTT Topics - Local Sensors (ESP32) - explicit inside topics
 const char* MQTT_TOPIC_GATEWAY_TEMP = "smartalarm/gateway/temperature/inside";
@@ -268,6 +257,9 @@ void reconnectMQTT() {
       // Subscribe to command topics
       mqttClient.subscribe("smartalarm/commands");
       mqttClient.subscribe("smartalarm/play_audio");
+      // Subscribe to audio upload topics used by AudioManager
+      mqttClient.subscribe("esp32/audio_request");
+      mqttClient.subscribe("esp32/audio_chunk");
       Serial.println("[MQTT] Subscribed to command topics");
     } else {
       Serial.print("failed, rc=");
@@ -280,6 +272,11 @@ void reconnectMQTT() {
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.print("[MQTT] Message received on topic: ");
   Serial.println(topic);
+
+  // Let AudioManager handle audio-upload topics first
+  if (String(topic) == "esp32/audio_request" || String(topic) == "esp32/audio_chunk") {
+    if (audio.handleMQTTMessage(topic, payload, length)) return;
+  }
 
   // Convert payload to string
   String message;
@@ -523,6 +520,10 @@ void setup() {
   // Setup WiFi and MQTT
   setupWiFi();
   setupMQTT();
+
+  // Inject the gateway's shared MQTT client into AudioManager so it can
+  // publish responses and receive forwarded messages.
+  audio.setMQTTClient(&mqttClient);
 
   // Setup ESP-NOW (after WiFi for channel sync)
   setupESPNow();

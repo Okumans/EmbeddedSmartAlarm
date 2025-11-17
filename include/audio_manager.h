@@ -3,18 +3,21 @@
 
 #include <Arduino.h>
 
-// ESP8266 and ESP32 use different SPIFFS headers
+// ESP8266 and ESP32 use different filesystem headers
 #ifdef ESP8266
 #include <FS.h>
 #else
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #endif
 
 #include "AudioFileSourceID3.h"
-#include "AudioFileSourceSPIFFS.h"
+#include "AudioFileSourceLittleFS.h"
 #include "AudioGeneratorMP3.h"
 #include "AudioGeneratorWAV.h"
 #include "AudioOutputI2S.h"
+
+// Forward declare PubSubClient to avoid including its header in this public header
+class PubSubClient;
 
 // I2S Configuration
 #define I2S_BCLK 26
@@ -24,10 +27,11 @@
 class AudioManager {
  private:
   AudioOutputI2S* out;
-  AudioFileSourceSPIFFS* file;
+  AudioFileSourceLittleFS* file;
   AudioFileSourceID3* id3;
   AudioGeneratorWAV* wav;
   AudioGeneratorMP3* mp3;
+  PubSubClient* mqttClientPtr;
 
   bool initialized;
   bool isPlaying;
@@ -41,6 +45,7 @@ class AudioManager {
 
   // Initialize audio system and SPIFFS
   bool begin();
+
 
   // Stop and cleanup
   void end();
@@ -72,6 +77,13 @@ class AudioManager {
 
   // Get SPIFFS info
   void printSPIFFSInfo();
+
+  // Inject shared MQTT client (from main) so AudioManager can publish/subscribe
+  void setMQTTClient(PubSubClient* client);
+
+  // Handle MQTT messages forwarded from the global callback in main.cpp.
+  // Returns true if the message was handled by AudioManager.
+  bool handleMQTTMessage(const char* topic, byte* payload, unsigned int length);
 };
 
 #endif  // AUDIO_MANAGER_H

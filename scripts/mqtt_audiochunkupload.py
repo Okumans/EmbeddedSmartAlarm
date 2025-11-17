@@ -3,6 +3,8 @@ import paho.mqtt.client as mqtt
 import os
 import time
 import math
+import argparse
+import sys
 
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
@@ -14,6 +16,7 @@ TOPIC_ACK = "esp32/audio_ack"
 
 CHUNK_SIZE = 4096
 free_space_reply = None
+current_audio_size = None
 last_ack = None
 
 
@@ -22,6 +25,7 @@ last_ack = None
 # -------------------------------------------------------------
 def on_message(client, userdata, msg):
     global free_space_reply
+    global current_audio_size
     global last_ack
     payload = msg.payload.decode()
 
@@ -38,9 +42,17 @@ def on_message(client, userdata, msg):
                 pass
         return
 
+    # Handle free space response: "FREE:<freeSpace>:<currentAudioSize>"
     if payload.startswith("FREE:"):
-        free_space_reply = int(payload[5:])
-        print(f"[✓] ESP32 reports free space: {free_space_reply} bytes")
+        try:
+            parts = payload[5:].split(":")
+            free_space_reply = int(parts[0])
+            current_audio_size = int(parts[1]) if len(parts) > 1 else 0
+            print(f"[✓] ESP32 reports:")
+            print(f"    - Free space: {free_space_reply} bytes")
+            print(f"    - Current audio file: {current_audio_size} bytes")
+        except Exception as e:
+            print(f"[WARNING] Failed to parse FREE response: {e}")
 
 
 # -------------------------------------------------------------
@@ -48,7 +60,9 @@ def on_message(client, userdata, msg):
 # -------------------------------------------------------------
 def request_free_space(client):
     global free_space_reply
+    global current_audio_size
     free_space_reply = None
+    current_audio_size = None
 
     print("[+] Requesting free storage from ESP32...")
     client.publish(TOPIC_REQUEST, "REQUEST_FREE_SPACE")
@@ -56,21 +70,30 @@ def request_free_space(client):
     # Wait for response
     for _ in range(30):  # wait max 3 seconds
         if free_space_reply is not None:
-            return free_space_reply
+            return free_space_reply, current_audio_size
         time.sleep(0.1)
 
     print("[ERROR] ESP32 did not respond.")
-    return None
+    return None, None
 
 
 # -------------------------------------------------------------
 # COMPRESS MP3
 # -------------------------------------------------------------
 def compress_mp3(input_file, output_file, bitrate="32k"):
-    print("[+] Compressing MP3...")
+    """
+    Compress MP3 file to specified bitrate.
+    If bitrate is None or "0", skip compression and use original file.
+    """
+    if bitrate is None or bitrate == "0":
+        print("[+] No compression - using original file")
+        return input_file  # Return input file path (no compression)
+    
+    print(f"[+] Compressing MP3 to {bitrate} bitrate...")
     audio = AudioSegment.from_mp3(input_file)
     audio.export(output_file, format="mp3", bitrate=bitrate)
     print("[✓] Compression complete.")
+    return output_file  # Return compressed file path
 
 
 # -------------------------------------------------------------
@@ -124,10 +147,51 @@ def send_in_chunks(client, file_path):
 # MAIN
 # -------------------------------------------------------------
 if __name__ == "__main__":
-    INPUT = "input.mp3"
-    OUTPUT = "compressed.mp3"
-
-    compress_mp3(INPUT, OUTPUT)
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description="Upload MP3 audio file to ESP32 via MQTT",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Upload with default compression (32k bitrate)
+  python mqtt_audiochunkupload.py input.mp3
+  
+  # Upload with custom compression
+  python mqtt_audiochunkupload.py input.mp3 --bitrate 64k
+  
+  # Upload without compression (use original file)
+  python mqtt_audiochunkupload.py input.mp3 --bitrate 0
+        """
+    )
+    
+    parser.add_argument("input_file", help="Input MP3 file to upload")
+    parser.add_argument(
+        "-b", "--bitrate",
+        default="32k",
+        help="Compression bitrate (e.g., 32k, 64k, 128k) or 0 for no compression (default: 32k)"
+    )
+    parser.add_argument(
+        "-o", "--output",
+        default="compressed.mp3",
+        help="Output file name for compressed file (default: compressed.mp3)"
+    )
+    
+    args = parser.parse_args()
+    
+    # Check if input file exists
+    if not os.path.exists(args.input_file):
+        print(f"[ERROR] Input file '{args.input_file}' not found!")
+        sys.exit(1)
+    
+    INPUT = args.input_file
+    OUTPUT = args.output
+    BITRATE = args.bitrate if args.bitrate != "0" else None
+    
+    print(f"[INFO] Input file: {INPUT}")
+    print(f"[INFO] Original size: {os.path.getsize(INPUT)} bytes")
+    
+    # Compress MP3 (or skip if bitrate is 0)
+    file_to_upload = compress_mp3(INPUT, OUTPUT, BITRATE)
 
     # Connect to MQTT
     client = mqtt.Client()
@@ -137,23 +201,35 @@ if __name__ == "__main__":
     client.subscribe(TOPIC_ACK)
     client.loop_start()
 
-    # 1) Ask ESP32 free space
-    free_space = request_free_space(client)
+    # 1) Ask ESP32 free space and current audio file size
+    free_space, current_audio = request_free_space(client)
     if free_space is None:
         print("[!] Aborting upload.")
-        exit()
+        sys.exit(1)
 
-    # 2) Compare with compressed file size
-    file_size = os.path.getsize(OUTPUT)
+    # 2) Compare with file size
+    file_size = os.path.getsize(file_to_upload)
 
-    print(f"[INFO] File size: {file_size} bytes")
+    print(f"\n[INFO] Upload file size: {file_size} bytes")
+    
+    # Calculate available space (free space + current audio that will be deleted)
+    available_space = free_space + (current_audio if current_audio else 0)
+    print(f"[INFO] Available space (including current audio): {available_space} bytes")
 
-    if file_size > free_space:
+    if file_size > available_space:
         print("[❌] File too large for ESP32 storage. Upload canceled.")
-        exit()
+        print(f"    Required: {file_size} bytes")
+        print(f"    Available: {available_space} bytes")
+        print(f"    (Free: {free_space} + Current audio: {current_audio})")
+        sys.exit(1)
+    
+    if current_audio and current_audio > 0:
+        print(f"[INFO] Note: Current audio ({current_audio} bytes) will be replaced")
 
     print("[✓] Enough space. Uploading file...")
-    send_in_chunks(client, OUTPUT)
+    send_in_chunks(client, file_to_upload)
 
     client.loop_stop()
     client.disconnect()
+    
+    print("\n[✓] Upload complete!")

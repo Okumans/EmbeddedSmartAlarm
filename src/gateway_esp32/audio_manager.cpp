@@ -1,18 +1,18 @@
 #include "audio_manager.h"
 
 // MQTT / WiFi for remote file upload
-#include <WiFi.h>
 #include <PubSubClient.h>
+#include <WiFi.h>
 #ifndef ESP8266
 #include <LittleFS.h>
 #endif
 // ---------------- MQTT TOPICS ----------------
 // (audio topics centralized in include/config.h; legacy defines kept for
 // backward compatibility in case other modules still use them)
-#define TOPIC_REQUEST   MQTT_TOPIC_AUDIO_REQUEST
-#define TOPIC_RESPONSE  MQTT_TOPIC_AUDIO_RESPONSE
-#define TOPIC_CHUNK     MQTT_TOPIC_AUDIO_CHUNK
-#define TOPIC_ACK       MQTT_TOPIC_AUDIO_ACK
+#define TOPIC_REQUEST MQTT_TOPIC_AUDIO_REQUEST
+#define TOPIC_RESPONSE MQTT_TOPIC_AUDIO_RESPONSE
+#define TOPIC_CHUNK MQTT_TOPIC_AUDIO_CHUNK
+#define TOPIC_ACK MQTT_TOPIC_AUDIO_ACK
 
 // ---------------- WIFI / MQTT SETTINGS ---------------
 #include "../../include/config.h"
@@ -26,6 +26,7 @@ String recvFilename = "/sound.mp3";
 bool receivingFile = false;
 size_t expectedSize = 0;
 size_t receivedSize = 0;
+unsigned long lastChunkTime = 0;  // Track upload timeout
 
 // (No forward declarations needed here — MQTT is handled by main gateway)
 
@@ -101,9 +102,8 @@ bool AudioManager::begin() {
   }
   Serial.println("[Audio] LittleFS mounted successfully");
   printSPIFFSInfo();
-  
-#endif
 
+#endif
 
   // Initialize I2S output
   Serial.println("[Audio] Initializing I2S output...");
@@ -338,11 +338,11 @@ void AudioManager::printSPIFFSInfo() {
   size_t usedBytes = LittleFS.usedBytes();
 #endif
 
-  #ifdef ESP8266
+#ifdef ESP8266
   Serial.println("[Audio] SPIFFS Info:");
-  #else
+#else
   Serial.println("[Audio] LittleFS Info:");
-  #endif
+#endif
   Serial.printf("  Total: %d bytes (%.2f MB)\n", totalBytes,
                 totalBytes / (1024.0 * 1024.0));
   Serial.printf("  Used:  %d bytes (%.2f MB)\n", usedBytes,
@@ -382,38 +382,66 @@ static int parseNumberFromPayload(const byte* payload, int start, int end) {
 }
 
 // Handle audio-related MQTT messages forwarded from main's callback.
-bool AudioManager::handleMQTTMessage(const char* topic, byte* payload, unsigned int length) {
+bool AudioManager::handleMQTTMessage(const char* topic, byte* payload,
+                                     unsigned int length) {
   // Handle simple ASCII header-based protocol where binary data follows header
   Serial.printf("[Audio MQTT] Topic: %s, len=%u\n", topic, length);
 
   String topicStr = String(topic);
   if (topicStr != TOPIC_REQUEST && topicStr != TOPIC_CHUNK) {
-    return false; // not handled here
+    return false;  // not handled here
   }
 
   // ---------- 1. PC asks for free space ----------
   if (topicStr == TOPIC_REQUEST) {
     const char req[] = "REQUEST_FREE_SPACE";
-    if (length == (sizeof(req)-1) && memcmp(payload, req, length) == 0) {
+    if (length == (sizeof(req) - 1) && memcmp(payload, req, length) == 0) {
       size_t total =
 #ifdef ESP8266
-        SPIFFS.totalBytes();
+          SPIFFS.totalBytes();
 #else
-        LittleFS.totalBytes();
+          LittleFS.totalBytes();
 #endif
       size_t used =
 #ifdef ESP8266
-        SPIFFS.usedBytes();
+          SPIFFS.usedBytes();
 #else
-        LittleFS.usedBytes();
+          LittleFS.usedBytes();
 #endif
       size_t freeSpace = total - used;
-      String reply = "FREE:" + String(freeSpace);
+
+      // Check if current audio file exists and get its size
+      size_t currentAudioSize = 0;
+#ifdef ESP8266
+      if (SPIFFS.exists(recvFilename)) {
+        File f = SPIFFS.open(recvFilename, "r");
+        if (f) {
+          currentAudioSize = f.size();
+          f.close();
+        }
+      }
+#else
+      if (LittleFS.exists(recvFilename)) {
+        File f = LittleFS.open(recvFilename, "r");
+        if (f) {
+          currentAudioSize = f.size();
+          f.close();
+        }
+      }
+#endif
+
+      // Send response: FREE:<freeSpace>:<currentAudioSize>
+      String reply =
+          "FREE:" + String(freeSpace) + ":" + String(currentAudioSize);
       if (mqttClientPtr) {
         mqttClientPtr->publish(TOPIC_RESPONSE, reply.c_str());
-        Serial.printf("[MQTT] Responded with free space: %u bytes\n", freeSpace);
+        Serial.printf(
+            "[MQTT] Responded - Free: %u bytes, Current audio: %u bytes\n",
+            freeSpace, currentAudioSize);
       }
       Serial.printf("[Audio] Free Space: %u bytes\n", freeSpace);
+      Serial.printf("[Audio] Current audio file size: %u bytes\n",
+                    currentAudioSize);
       return true;
     }
     return false;
@@ -426,7 +454,8 @@ bool AudioManager::handleMQTTMessage(const char* topic, byte* payload, unsigned 
     expectedSize = num.toInt();
     receivedSize = 0;
 
-    Serial.printf("[Audio] START Expecting file size: %u bytes\n", expectedSize);
+    Serial.printf("[Audio] START Expecting file size: %u bytes\n",
+                  expectedSize);
 
     // Delete old file
     if (
@@ -435,7 +464,7 @@ bool AudioManager::handleMQTTMessage(const char* topic, byte* payload, unsigned 
 #else
         LittleFS.exists(recvFilename)
 #endif
-        ) {
+    ) {
 #ifdef ESP8266
       SPIFFS.remove(recvFilename);
 #else
@@ -445,9 +474,9 @@ bool AudioManager::handleMQTTMessage(const char* topic, byte* payload, unsigned 
     }
 
 #ifdef ESP8266
-    fsFile = SPIFFS.open(recvFilename, FILE_WRITE);
+    fsFile = SPIFFS.open(recvFilename, "w");
 #else
-    fsFile = LittleFS.open(recvFilename, FILE_WRITE);
+    fsFile = LittleFS.open(recvFilename, "w");
 #endif
     if (!fsFile) {
       Serial.println("[Audio] ERROR: Could not open file for writing.");
@@ -458,16 +487,17 @@ bool AudioManager::handleMQTTMessage(const char* topic, byte* payload, unsigned 
       size_t total = LittleFS.totalBytes();
       size_t used = LittleFS.usedBytes();
       size_t freeBytes = total - used;
-      Serial.printf("[Audio] LittleFS total=%u used=%u free=%u\n", total,
-                    used, freeBytes);
+      Serial.printf("[Audio] LittleFS total=%u used=%u free=%u\n", total, used,
+                    freeBytes);
 
       // If no free space, attempt a format and retry (ESP32 only)
       if (freeBytes == 0) {
-        Serial.println("[Audio] No free space — attempting LittleFS.format() and retry");
+        Serial.println(
+            "[Audio] No free space — attempting LittleFS.format() and retry");
         if (LittleFS.format()) {
           delay(100);
           if (LittleFS.begin()) {
-            fsFile = LittleFS.open(recvFilename, FILE_WRITE);
+            fsFile = LittleFS.open(recvFilename, "w");
             if (fsFile) {
               Serial.println("[Audio] File opened after format.");
               receivingFile = true;
@@ -478,9 +508,10 @@ bool AudioManager::handleMQTTMessage(const char* topic, byte* payload, unsigned 
         Serial.println("[Audio] Format retry failed.");
       } else {
         // Try a quick reopen attempt
-        Serial.println("[Audio] Attempting to reopen file after short delay...");
+        Serial.println(
+            "[Audio] Attempting to reopen file after short delay...");
         delay(50);
-        fsFile = LittleFS.open(recvFilename, FILE_WRITE);
+        fsFile = LittleFS.open(recvFilename, "w");
         if (fsFile) {
           receivingFile = true;
           return true;
@@ -492,6 +523,9 @@ bool AudioManager::handleMQTTMessage(const char* topic, byte* payload, unsigned 
       return true;
     }
 
+    Serial.printf("[Audio] File opened successfully: %s\n",
+                  recvFilename.c_str());
+    Serial.printf("[Audio] Ready to receive %u bytes\n", expectedSize);
     receivingFile = true;
     return true;
   }
@@ -499,32 +533,56 @@ bool AudioManager::handleMQTTMessage(const char* topic, byte* payload, unsigned 
   // ---------- CHUNK: header then raw bytes ----------
   const char chunkPrefix[] = "CHUNK:";
   if (length > 6 && memcmp(payload, chunkPrefix, 6) == 0) {
-    if (!receivingFile) return true;
+    if (!receivingFile) {
+      Serial.println(
+          "[Audio] WARNING: Received chunk but not in receiving mode!");
+      return true;
+    }
 
     int firstColon = -1;
     int secondColon = -1;
     for (unsigned int i = 6; i < length; ++i) {
       if (payload[i] == ':') {
-        if (firstColon == -1) firstColon = i;
-        else { secondColon = i; break; }
+        if (firstColon == -1)
+          firstColon = i;
+        else {
+          secondColon = i;
+          break;
+        }
       }
     }
-    if (firstColon == -1 || secondColon == -1) return true;
+    if (firstColon == -1 || secondColon == -1) {
+      Serial.println("[Audio] WARNING: Malformed chunk header!");
+      return true;
+    }
 
     int chunkIndex = parseNumberFromPayload(payload, 6, firstColon);
     int headerLen = secondColon + 1;
     int rawLen = (int)length - headerLen;
 
     if (rawLen > 0) {
-      fsFile.write(payload + headerLen, rawLen);
+      size_t bytesWritten = fsFile.write(payload + headerLen, rawLen);
+      if (bytesWritten != (size_t)rawLen) {
+        Serial.printf("[Audio] WARNING: Wrote %u bytes but expected %d!\n",
+                      bytesWritten, rawLen);
+      }
       receivedSize += rawLen;
-      Serial.printf("[Audio] Received chunk %d (%d bytes)\n", chunkIndex, rawLen);
+      float progress = (receivedSize * 100.0) / expectedSize;
+      Serial.printf("[Audio] Chunk %d: %d bytes | Total: %u/%u (%.1f%%)\n",
+                    chunkIndex, rawLen, receivedSize, expectedSize, progress);
       // Send ACK for this chunk so the uploader can proceed
       if (mqttClientPtr) {
         char ackBuf[32];
         snprintf(ackBuf, sizeof(ackBuf), "ACK:%d", chunkIndex);
-        mqttClientPtr->publish(TOPIC_ACK, ackBuf);
-        Serial.printf("[MQTT] Sent ACK for chunk %d\n", chunkIndex);
+        bool published = mqttClientPtr->publish(TOPIC_ACK, ackBuf);
+        if (published) {
+          Serial.printf("[MQTT] ✓ ACK sent for chunk %d\n", chunkIndex);
+        } else {
+          Serial.printf("[MQTT] ✗ Failed to send ACK for chunk %d\n",
+                        chunkIndex);
+        }
+      } else {
+        Serial.println("[MQTT] ERROR: mqttClientPtr is NULL!");
       }
     }
     return true;
@@ -536,7 +594,14 @@ bool AudioManager::handleMQTTMessage(const char* topic, byte* payload, unsigned 
     if (receivingFile) {
       fsFile.close();
       receivingFile = false;
-      Serial.printf("[Audio] DONE File received. Total: %u bytes\n", receivedSize);
+      Serial.println("[Audio] ============================================");
+      Serial.printf("[Audio] FILE UPLOAD COMPLETE!\n");
+      Serial.printf("[Audio] Total received: %u bytes (expected: %u)\n",
+                    receivedSize, expectedSize);
+      Serial.println("[Audio] ============================================");
+    } else {
+      Serial.println(
+          "[Audio] WARNING: Received END but not in receiving mode!");
     }
     return true;
   }

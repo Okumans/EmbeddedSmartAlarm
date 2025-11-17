@@ -25,7 +25,8 @@ const char* MQTT_TOPIC_GATEWAY_TEMP = "smartalarm/gateway/temperature/inside";
 const char* MQTT_TOPIC_GATEWAY_HUMIDITY = "smartalarm/gateway/humidity/inside";
 const char* MQTT_TOPIC_STATUS = "smartalarm/gateway/status";
 
-// MQTT Topics - Remote Sensors (from NodeMCU via ESP-NOW) - explicit outside topics
+// MQTT Topics - Remote Sensors (from NodeMCU via ESP-NOW) - explicit outside
+// topics
 const char* MQTT_TOPIC_REMOTE_TEMP = "smartalarm/sensor/temperature/outside";
 const char* MQTT_TOPIC_REMOTE_HUMIDITY = "smartalarm/sensor/humidity/outside";
 const char* MQTT_TOPIC_REMOTE_PRESSURE = "smartalarm/sensor/pressure/outside";
@@ -242,9 +243,12 @@ void setupESPNow() {
 // ============================================================================
 
 void setupMQTT() {
+  // Set larger buffer size for audio chunk upload (default is 256 bytes)
+  // Chunks are 4096 bytes + header, so we need at least 4200 bytes
+  mqttClient.setBufferSize(4200);
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
-  Serial.println("[MQTT] Client configured");
+  Serial.println("[MQTT] Client configured with 4200 byte buffer");
 }
 
 void reconnectMQTT() {
@@ -272,9 +276,11 @@ void reconnectMQTT() {
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.print("[MQTT] Message received on topic: ");
   Serial.println(topic);
+  Serial.printf("[MQTT] Message length: %u bytes\n", length);
 
   // Let AudioManager handle audio-upload topics first
-  if (String(topic) == "esp32/audio_request" || String(topic) == "esp32/audio_chunk") {
+  if (String(topic) == "esp32/audio_request" ||
+      String(topic) == "esp32/audio_chunk") {
     if (audio.handleMQTTMessage(topic, payload, length)) return;
   }
 

@@ -1,4 +1,3 @@
-#include <Adafruit_BMP085.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_Sensor.h>
@@ -32,18 +31,17 @@ const char* MQTT_SERVER = "broker.hivemq.com";  // Change to your MQTT broker
 const int MQTT_PORT = 1883;
 const char* MQTT_CLIENT_ID = "SmartAlarmClock";
 
-// MQTT Topics - Local Sensors (ESP32)
-const char* MQTT_TOPIC_TEMP = "smartalarm/gateway/temperature";
-const char* MQTT_TOPIC_HUMIDITY = "smartalarm/gateway/humidity";
-const char* MQTT_TOPIC_PRESSURE = "smartalarm/gateway/pressure";
+// MQTT Topics - Local Sensors (ESP32) - explicit inside topics
+const char* MQTT_TOPIC_GATEWAY_TEMP = "smartalarm/gateway/temperature/inside";
+const char* MQTT_TOPIC_GATEWAY_HUMIDITY = "smartalarm/gateway/humidity/inside";
 const char* MQTT_TOPIC_STATUS = "smartalarm/gateway/status";
 
-// MQTT Topics - Remote Sensors (from NodeMCU via ESP-NOW)
-const char* MQTT_TOPIC_REMOTE_TEMP = "smartalarm/sensor/temperature";
-const char* MQTT_TOPIC_REMOTE_HUMIDITY = "smartalarm/sensor/humidity";
-const char* MQTT_TOPIC_REMOTE_PRESSURE = "smartalarm/sensor/pressure";
-const char* MQTT_TOPIC_REMOTE_UV = "smartalarm/sensor/uvindex";
-const char* MQTT_TOPIC_REMOTE_BATTERY = "smartalarm/sensor/battery";
+// MQTT Topics - Remote Sensors (from NodeMCU via ESP-NOW) - explicit outside topics
+const char* MQTT_TOPIC_REMOTE_TEMP = "smartalarm/sensor/temperature/outside";
+const char* MQTT_TOPIC_REMOTE_HUMIDITY = "smartalarm/sensor/humidity/outside";
+const char* MQTT_TOPIC_REMOTE_PRESSURE = "smartalarm/sensor/pressure/outside";
+const char* MQTT_TOPIC_REMOTE_UV = "smartalarm/sensor/uvindex/outside";
+const char* MQTT_TOPIC_REMOTE_BATTERY = "smartalarm/sensor/battery/outside";
 const char* MQTT_TOPIC_REMOTE_STATUS = "smartalarm/sensor/status";
 
 // Pin Definitions
@@ -56,7 +54,7 @@ const char* MQTT_TOPIC_REMOTE_STATUS = "smartalarm/sensor/status";
 #define SCL_PIN 22
 
 // I2C Multiplexer Channels
-#define TCA_CHANNEL_BMP 0
+// BMP/pressure sensor removed from gateway for now
 #define TCA_CHANNEL_OLED 1
 
 // Display Configuration
@@ -73,7 +71,6 @@ const char* MQTT_TOPIC_REMOTE_STATUS = "smartalarm/sensor/status";
 // ============================================================================
 
 DHT dht(DHTPIN, DHTTYPE);
-Adafruit_BMP085 bmp;
 TCA9548A tca;
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 WiFiClient wifiClient;
@@ -88,7 +85,6 @@ unsigned long lastSensorRead = 0;
 unsigned long lastMqttPublish = 0;
 float currentTemp = 0.0;
 float currentHumidity = 0.0;
-float currentPressure = 0.0;
 int animationX = 0;
 
 // Remote sensor data (from NodeMCU via ESP-NOW)
@@ -337,15 +333,11 @@ void publishMQTTData() {
 
   char tempStr[10];
   char humStr[10];
-  char pressStr[10];
-
   dtostrf(currentTemp, 4, 1, tempStr);
   dtostrf(currentHumidity, 4, 1, humStr);
-  dtostrf(currentPressure, 6, 1, pressStr);
 
-  mqttClient.publish(MQTT_TOPIC_TEMP, tempStr);
-  mqttClient.publish(MQTT_TOPIC_HUMIDITY, humStr);
-  mqttClient.publish(MQTT_TOPIC_PRESSURE, pressStr);
+  mqttClient.publish(MQTT_TOPIC_GATEWAY_TEMP, tempStr);
+  mqttClient.publish(MQTT_TOPIC_GATEWAY_HUMIDITY, humStr);
 
   Serial.println("[MQTT] Gateway sensor data published");
 }
@@ -399,14 +391,7 @@ void initSensors() {
   tca.begin();
   Serial.println("[Sensors] TCA9548A initialized");
 
-  // Initialize BMP085 on channel 0
-  tca.openChannel(TCA_CHANNEL_BMP);
-  if (bmp.begin()) {
-    Serial.println("[Sensors] BMP085 initialized");
-  } else {
-    Serial.println("[Sensors] BMP085 initialization failed!");
-  }
-  tca.closeChannel(TCA_CHANNEL_BMP);
+  // BMP/pressure sensor initialization removed from gateway for now
 }
 
 // ============================================================================
@@ -444,22 +429,16 @@ void initDisplay() {
 // ============================================================================
 
 void readSensors() {
-  // Read DHT22
-  float temp = dht.readTemperature();
-  float hum = dht.readHumidity();
+  // // Read DHT22
+  // float temp = dht.readTemperature();
+  // float hum = dht.readHumidity();
 
-  // Read BMP085
-  tca.openChannel(TCA_CHANNEL_BMP);
-  float pressure = bmp.readPressure() / 100.0;  // Convert to hPa
-  tca.closeChannel(TCA_CHANNEL_BMP);
+  // // Update global variables if readings are valid
+  // if (!isnan(temp)) currentTemp = temp;
+  // if (!isnan(hum)) currentHumidity = hum;
 
-  // Update global variables if readings are valid
-  if (!isnan(temp)) currentTemp = temp;
-  if (!isnan(hum)) currentHumidity = hum;
-  if (pressure > 0) currentPressure = pressure;
-
-  Serial.printf("[Sensors] T=%.1f°C, H=%.1f%%, P=%.1fhPa\n", currentTemp,
-                currentHumidity, currentPressure);
+  // Serial.printf("[Sensors] T=%.1f°C, H=%.1f%%, P=%.1fhPa\n", currentTemp,
+  //               currentHumidity, currentPressure);
 }
 
 // ============================================================================

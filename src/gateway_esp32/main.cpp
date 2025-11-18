@@ -8,11 +8,13 @@
 #include <Wire.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <soc/rtc_cntl_reg.h>
+#include <soc/soc.h>
 
 #include "../../include/mqtt_manager.h"
+#include "../../include/rtos_tasks.h"
 #include "../../include/sensor_data.h"
 #include "../../include/sensor_manager.h"
-#include "../../include/task_scheduler.h"
 #include "audio_manager.h"
 
 // ============================================================================
@@ -69,7 +71,6 @@ WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 MQTTManager mqtt;
 AudioManager audio;
-TaskScheduler scheduler;  // Task scheduler for prioritizing operations
 
 // ============================================================================
 // Global Variables
@@ -451,6 +452,11 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
+  // Disable brownout detector to prevent crashes with insufficient power
+  // WARNING: Use a proper 5V/2A power supply in production!
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+  Serial.println("[System] Brownout detector disabled");
+
   Serial.println("\n\n========================================");
   Serial.println("Smart Alarm Clock - Starting");
   Serial.println("========================================\n");
@@ -484,56 +490,13 @@ void setup() {
   Serial.println("Waiting for sensor data via ESP-NOW...");
   Serial.println("========================================\n");
 
-  // Setup task scheduler with prioritized tasks
-  Serial.println("[Scheduler] Configuring tasks...");
+  // Initialize and start FreeRTOS tasks
+  initRTOSTasks();
+  startRTOSTasks();
 
-  // CRITICAL: Audio must run every loop for smooth playback
-  scheduler.addTask([]() { audio.loop(); }, TaskScheduler::PRIORITY_CRITICAL,
-                    "Audio");
-
-  // HIGH: MQTT needs frequent processing but not every loop
-  scheduler.addTask([]() { mqtt.loop(); }, TaskScheduler::PRIORITY_HIGH,
-                    "MQTT");
-
-  // MEDIUM: Sensor reading every 2 seconds
-  scheduler.addTask(
-      []() {
-        static unsigned long lastSensorRead = 0;
-        unsigned long now = millis();
-        if (now - lastSensorRead >= SENSOR_READ_INTERVAL) {
-          lastSensorRead = now;
-          localSensors.readSensors();
-          updateDisplay();
-        }
-      },
-      TaskScheduler::PRIORITY_LOW, "Sensors");
-
-  // LOW: MQTT publishing every 10 seconds
-  scheduler.addTask(
-      []() {
-        static unsigned long lastMqttPublish = 0;
-        unsigned long now = millis();
-        if (now - lastMqttPublish >= MQTT_PUBLISH_INTERVAL) {
-          lastMqttPublish = now;
-          localSensors.publishToMQTT(mqtt, MQTT_TOPIC_GATEWAY_TEMP,
-                                     MQTT_TOPIC_GATEWAY_HUMIDITY);
-          publishRemoteSensorData();
-        }
-      },
-      TaskScheduler::PRIORITY_LOW, "MQTT Publish");
-
-  // LOW: WiFi reconnection check
-  scheduler.addTask(
-      []() {
-        if (WiFi.status() != WL_CONNECTED) {
-          Serial.println("[WiFi] Connection lost, reconnecting...");
-          setupWiFi();
-        }
-      },
-      TaskScheduler::PRIORITY_LOW, "WiFi Check");
-
-  scheduler.printStatus();
-  Serial.println("[Scheduler] Task scheduler ready!");
+  Serial.println("[System] FreeRTOS tasks running!");
+  Serial.println(
+      "[System] Arduino loop() will be used for WiFi maintenance only\n");
 }
 
 // ============================================================================
@@ -541,10 +504,12 @@ void setup() {
 // ============================================================================
 
 void loop() {
-  // Run all scheduled tasks with proper priorities
-  // Audio (CRITICAL) runs every loop
-  // MQTT (HIGH) runs every 5ms
-  // Sensors (MEDIUM) run every 10ms
-  // MQTT Publish & WiFi Check (LOW) run every 100ms
-  scheduler.run();
+  // WiFi reconnection check (everything else runs in FreeRTOS tasks)
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[WiFi] Connection lost, reconnecting...");
+    setupWiFi();
+  }
+
+  // Small delay to prevent watchdog issues
+  vTaskDelay(pdMS_TO_TICKS(100));
 }

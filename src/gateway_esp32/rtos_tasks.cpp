@@ -1,5 +1,7 @@
 #include "../../include/rtos_tasks.h"
 
+#include <WebSocketsServer.h>
+
 #include "../../include/mqtt_manager.h"
 #include "../../include/sensor_manager.h"
 #include "audio_manager.h"
@@ -10,6 +12,9 @@ extern MQTTManager mqtt;
 extern SensorManager localSensors;
 extern void updateDisplay();
 extern void publishRemoteSensorData();
+
+// WebSocket Server (Port 81)
+WebSocketsServer webSocketServer(WEBSOCKET_SERVER_PORT);
 
 // Task handles
 TaskHandle_t audioDecodeTaskHandle = NULL;
@@ -24,6 +29,9 @@ QueueHandle_t audioTxQueue = NULL;
 QueueHandle_t audioRxQueue = NULL;
 QueueHandle_t mqttQueue = NULL;
 
+// StreamBuffer for Opus audio streaming
+StreamBufferHandle_t opusStreamBuffer = NULL;
+
 // ============================================================================
 // AUDIO DECODE TASK - Play incoming audio stream
 // ============================================================================
@@ -33,23 +41,33 @@ void audioDecodeTask(void* parameter) {
   AudioPacket packet;
 
   for (;;) {
-    // Call audio loop for local MP3 playback
-    audio.loop();
+    // Check if we're in streaming mode
+    if (audio.isStreaming()) {
+      // Process streaming audio (Opus decoding + I2S output)
+      audio.processStreamingAudio();
+    } else {
+      // Normal MP3 playback mode
+      audio.loop();
+    }
 
-    // Check for incoming audio packets from WebSocket (future)
+    // Check for incoming audio packets from queue (future use for bidirectional
+    // streaming)
     if (audioRxQueue != NULL &&
         xQueueReceive(audioRxQueue, &packet, 0) == pdTRUE) {
       if (packet.isValid) {
         Serial.printf("[Audio RX] Received %d bytes at %lu\n", packet.length,
                       packet.timestamp);
-        // TODO: Decode Opus and send to I2S
-        // This will be implemented when WebSocket streaming is added
+        // This could be used for future bidirectional audio
       }
     }
 
     // Delay to prevent power issues and watchdog timeout
-    // 10ms is enough for smooth MP3 playback
-    vTaskDelay(pdMS_TO_TICKS(10));
+    // When streaming, run faster for low-latency
+    if (audio.isStreaming()) {
+      vTaskDelay(pdMS_TO_TICKS(5));  // 5ms for streaming (200Hz)
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(10));  // 10ms for MP3 playback
+    }
   }
 }
 
@@ -74,40 +92,107 @@ void audioEncodeTask(void* parameter) {
 }
 
 // ============================================================================
+// WEBSOCKET EVENT CALLBACK - The "Producer"
+// ============================================================================
+void webSocketEvent(uint8_t clientNum, WStype_t type, uint8_t* payload,
+                    size_t length) {
+  switch (type) {
+    case WStype_DISCONNECTED:
+      Serial.printf("[WebSocket] Client #%u disconnected\n", clientNum);
+      break;
+
+    case WStype_CONNECTED: {
+      IPAddress ip = webSocketServer.remoteIP(clientNum);
+      Serial.printf("[WebSocket] Client #%u connected from %d.%d.%d.%d\n",
+                    clientNum, ip[0], ip[1], ip[2], ip[3]);
+      break;
+    }
+
+    case WStype_BIN: {
+      // Binary data received - this is our Opus audio stream!
+      if (opusStreamBuffer == NULL) {
+        Serial.println("[WebSocket] ERROR: StreamBuffer not initialized!");
+        return;
+      }
+
+      // Check if we have space in the buffer
+      size_t availableSpace = xStreamBufferSpacesAvailable(opusStreamBuffer);
+      size_t requiredSpace = PACKET_HEADER_SIZE + length;
+
+      if (availableSpace < requiredSpace) {
+        // Buffer overflow - drop packet (better than crashing)
+        Serial.printf(
+            "[WebSocket] Buffer full! Dropping %u bytes (available: %u)\n",
+            length, availableSpace);
+        return;
+      }
+
+      // Write packet length header (2 bytes, little-endian)
+      uint16_t packetLength = (uint16_t)length;
+      size_t written = xStreamBufferSend(opusStreamBuffer, &packetLength,
+                                         PACKET_HEADER_SIZE, 0);
+
+      if (written != PACKET_HEADER_SIZE) {
+        Serial.println("[WebSocket] ERROR: Failed to write packet header!");
+        return;
+      }
+
+      // Write the actual Opus payload
+      written = xStreamBufferSend(opusStreamBuffer, payload, length, 0);
+
+      if (written != length) {
+        Serial.printf(
+            "[WebSocket] WARNING: Partial write! Expected %u, wrote %u\n",
+            length, written);
+        return;
+      }
+
+      // Success - packet is now in the buffer for the Audio Decode Task
+      // (Uncomment for debugging - will be very verbose)
+      // Serial.printf("[WebSocket] Received %u bytes, buffer level: %u/%u\n",
+      //               length, BUFFER_SIZE_BYTES - availableSpace,
+      //               BUFFER_SIZE_BYTES);
+      break;
+    }
+
+    case WStype_TEXT:
+      // Text messages not used in this implementation
+      Serial.printf("[WebSocket] Text message from #%u: %s\n", clientNum,
+                    payload);
+      break;
+
+    default:
+      break;
+  }
+}
+
+// ============================================================================
 // WEBSOCKET TASK - Handle bidirectional audio streaming
 // ============================================================================
 void websocketTask(void* parameter) {
   Serial.println("[RTOS] WebSocket Task started on Core 0");
 
-  // This task will be suspended until WebSocket is implemented
-  vTaskSuspend(NULL);
-
-  AudioPacket txPacket;
-  AudioPacket rxPacket;
+  // Initialize WebSocket server
+  webSocketServer.begin();
+  webSocketServer.onEvent(webSocketEvent);
+  Serial.printf("[WebSocket] Server started on port %d\n",
+                WEBSOCKET_SERVER_PORT);
 
   for (;;) {
-    // TODO: Implement WebSocket connection
-    // 1. Maintain WebSocket connection
-    // 2. Send audio from audioTxQueue to server
-    // 3. Receive audio from server to audioRxQueue
+    // Process WebSocket events (handles incoming connections and data)
+    webSocketServer.loop();
 
-    // Example structure:
+    // TODO: Handle outgoing audio (microphone streaming)
+    // This will be implemented when adding microphone support
     /*
+    AudioPacket txPacket;
     if (xQueueReceive(audioTxQueue, &txPacket, 0) == pdTRUE) {
-      // Send to WebSocket
-      webSocket.sendBinary(txPacket.data, txPacket.length);
-    }
-
-    if (webSocket.hasData()) {
-      // Receive from WebSocket
-      size_t len = webSocket.readBinary(rxPacket.data, sizeof(rxPacket.data));
-      rxPacket.length = len;
-      rxPacket.timestamp = millis();
-      rxPacket.isValid = true;
-      xQueueSend(audioRxQueue, &rxPacket, 0);
+      // Send to all connected clients
+      webSocketServer.broadcastBIN(txPacket.data, txPacket.length);
     }
     */
 
+    // Run at 200Hz (5ms) for low-latency streaming
     vTaskDelay(pdMS_TO_TICKS(5));
   }
 }
@@ -200,6 +285,19 @@ void initRTOSTasks() {
   }
 
   Serial.println("[RTOS] ✓ Queues created successfully");
+
+  // Create StreamBuffer for Opus audio streaming
+  Serial.println("[RTOS] Initializing StreamBuffer...");
+  opusStreamBuffer =
+      xStreamBufferCreate(BUFFER_SIZE_BYTES, STREAM_BUFFER_TRIGGER_LEVEL);
+
+  if (opusStreamBuffer == NULL) {
+    Serial.println("[RTOS] ERROR: Failed to create StreamBuffer!");
+    return;
+  }
+
+  Serial.printf("[RTOS] ✓ StreamBuffer created (%d bytes, trigger: %d)\n",
+                BUFFER_SIZE_BYTES, STREAM_BUFFER_TRIGGER_LEVEL);
 }
 
 void startRTOSTasks() {
@@ -239,7 +337,7 @@ void startRTOSTasks() {
                           0  // Core 0 (same core as WiFi stack)
   );
 
-  // WebSocket - HIGH priority on Core 0 (suspended until needed)
+  // WebSocket - HIGH priority on Core 0 (now active for streaming)
   xTaskCreatePinnedToCore(websocketTask, "WebSocket", STACK_SIZE_NETWORK, NULL,
                           PRIORITY_WEBSOCKET, &websocketTaskHandle,
                           0  // Core 0 (same core as WiFi stack)
@@ -252,7 +350,7 @@ void startRTOSTasks() {
   Serial.println("Core 0 (Network):");
   Serial.println("  - WiFi Stack (system)");
   Serial.println("  - MQTT Task (priority 2)");
-  Serial.println("  - WebSocket Task (priority 2, suspended)");
+  Serial.println("  - WebSocket Task (priority 2, ACTIVE)");
   Serial.println("\nCore 1 (Audio/Display):");
   Serial.println("  - Audio Decode (priority 3)");
   Serial.println("  - Audio Encode (priority 3, suspended)");

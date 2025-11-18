@@ -3,6 +3,8 @@
 // MQTT Manager for remote file upload
 #include <LittleFS.h>
 #include <WiFi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/stream_buffer.h>
 
 #include "../../include/mqtt_manager.h"
 
@@ -29,6 +31,14 @@ AudioManager::AudioManager() {
   initialized = false;
   isPlaying = false;
   currentVolume = 0.5;
+
+  // Streaming state
+  currentState = AUDIO_STATE_IDLE;
+  opusDecoder = nullptr;
+  prerollComplete = false;
+
+  // Initialize silence buffer
+  memset(silenceBuffer, 0, sizeof(silenceBuffer));
 }
 
 AudioManager::~AudioManager() { cleanup(); }
@@ -246,6 +256,200 @@ static int parseNumberFromPayload(const byte* payload, int start, int end) {
   memcpy(buf, payload + start, len);
   buf[len] = '\0';
   return atoi(buf);
+}
+
+// ============================================================================
+// STREAMING METHODS
+// ============================================================================
+
+void AudioManager::cleanupStreaming() {
+  if (opusDecoder) {
+    opus_decoder_destroy(opusDecoder);
+    opusDecoder = nullptr;
+    Serial.println("[Audio] Opus decoder destroyed");
+  }
+}
+
+bool AudioManager::startStreaming() {
+  if (!initialized) {
+    Serial.println("[Audio] Cannot start streaming - not initialized!");
+    return false;
+  }
+
+  Serial.println("[Audio] ========================================");
+  Serial.println("[Audio] Starting Streaming Mode");
+  Serial.println("[Audio] ========================================");
+
+  // Stop any currently playing file
+  if (isPlaying) {
+    Serial.println("[Audio] Stopping file playback...");
+    stop();
+  }
+
+  // Cleanup any existing streaming resources
+  cleanupStreaming();
+
+  // Create Opus decoder
+  int error;
+  opusDecoder =
+      opus_decoder_create(STREAM_SAMPLE_RATE, STREAM_CHANNELS, &error);
+
+  if (error != OPUS_OK || opusDecoder == nullptr) {
+    Serial.printf("[Audio] ERROR: Failed to create Opus decoder! Error: %d\n",
+                  error);
+    return false;
+  }
+
+  Serial.println("[Audio] ✓ Opus decoder created");
+
+  // Reconfigure I2S for 48kHz
+  Serial.println("[Audio] Reconfiguring I2S for 48kHz...");
+  i2s_set_sample_rates(I2S_NUM_0, STREAM_SAMPLE_RATE);
+  Serial.println("[Audio] ✓ I2S configured for 48kHz");
+
+  // Reset StreamBuffer (extern declaration)
+  extern StreamBufferHandle_t opusStreamBuffer;
+  if (opusStreamBuffer) {
+    xStreamBufferReset(opusStreamBuffer);
+    Serial.println("[Audio] ✓ StreamBuffer reset");
+  } else {
+    Serial.println("[Audio] WARNING: StreamBuffer not available!");
+  }
+
+  // Set state
+  currentState = AUDIO_STATE_STREAMING;
+  prerollComplete = false;
+
+  Serial.println("[Audio] ✓ Streaming mode active!");
+  Serial.println("[Audio] ========================================");
+
+  return true;
+}
+
+void AudioManager::stopStreaming() {
+  if (currentState != AUDIO_STATE_STREAMING) {
+    return;
+  }
+
+  Serial.println("[Audio] ========================================");
+  Serial.println("[Audio] Stopping Streaming Mode");
+  Serial.println("[Audio] ========================================");
+
+  // Cleanup decoder
+  cleanupStreaming();
+
+  // Restore I2S to default 44.1kHz for MP3 playback
+  Serial.println("[Audio] Restoring I2S to 44.1kHz...");
+  i2s_set_sample_rates(I2S_NUM_0, 44100);
+
+  // Write silence to prevent pops
+  size_t bytes_written;
+  i2s_write(I2S_NUM_0, silenceBuffer, sizeof(silenceBuffer), &bytes_written,
+            portMAX_DELAY);
+
+  currentState = AUDIO_STATE_IDLE;
+  prerollComplete = false;
+
+  Serial.println("[Audio] ✓ Streaming stopped");
+  Serial.println("[Audio] ========================================");
+}
+
+bool AudioManager::isStreaming() const {
+  return currentState == AUDIO_STATE_STREAMING;
+}
+
+void AudioManager::processStreamingAudio() {
+  if (currentState != AUDIO_STATE_STREAMING || opusDecoder == nullptr) {
+    return;
+  }
+
+  extern StreamBufferHandle_t opusStreamBuffer;
+  if (opusStreamBuffer == nullptr) {
+    return;
+  }
+
+  // Check for pre-roll (wait for buffer to fill up before starting playback)
+  if (!prerollComplete) {
+    size_t bytesAvailable = xStreamBufferBytesAvailable(opusStreamBuffer);
+    if (bytesAvailable < PREROLL_MIN_BYTES) {
+      // Buffer not full enough yet - write silence to I2S
+      size_t bytes_written;
+      i2s_write(I2S_NUM_0, silenceBuffer, sizeof(silenceBuffer), &bytes_written,
+                0);
+      return;
+    } else {
+      prerollComplete = true;
+      Serial.printf("[Audio] Pre-roll complete! Buffer filled: %u bytes\n",
+                    bytesAvailable);
+    }
+  }
+
+  // Step 1: Read packet length header (2 bytes)
+  uint16_t packetLength = 0;
+  size_t received =
+      xStreamBufferReceive(opusStreamBuffer, &packetLength, PACKET_HEADER_SIZE,
+                           pdMS_TO_TICKS(STREAM_BUFFER_TIMEOUT_MS));
+
+  if (received != PACKET_HEADER_SIZE) {
+    // No data available or timeout - write silence to keep I2S running
+    size_t bytes_written;
+    i2s_write(I2S_NUM_0, silenceBuffer, sizeof(silenceBuffer), &bytes_written,
+              0);
+    return;
+  }
+
+  // Validate packet length
+  if (packetLength == 0 || packetLength > MAX_OPUS_PACKET_SIZE) {
+    Serial.printf("[Audio] ERROR: Invalid packet length: %u\n", packetLength);
+    // Try to recover by reading silence
+    size_t bytes_written;
+    i2s_write(I2S_NUM_0, silenceBuffer, sizeof(silenceBuffer), &bytes_written,
+              0);
+    return;
+  }
+
+  // Step 2: Read the actual Opus packet
+  received =
+      xStreamBufferReceive(opusStreamBuffer, opusPacketBuffer, packetLength,
+                           pdMS_TO_TICKS(STREAM_BUFFER_TIMEOUT_MS));
+
+  if (received != packetLength) {
+    Serial.printf("[Audio] ERROR: Incomplete packet! Expected %u, got %u\n",
+                  packetLength, received);
+    // Write silence and continue
+    size_t bytes_written;
+    i2s_write(I2S_NUM_0, silenceBuffer, sizeof(silenceBuffer), &bytes_written,
+              0);
+    return;
+  }
+
+  // Step 3: Decode Opus packet to PCM
+  int decodedSamples = opus_decode(opusDecoder, opusPacketBuffer, packetLength,
+                                   pcmBuffer, OPUS_FRAME_SAMPLES, 0);
+
+  if (decodedSamples < 0) {
+    Serial.printf("[Audio] ERROR: Opus decode failed! Error: %d\n",
+                  decodedSamples);
+    // Write silence on error
+    size_t bytes_written;
+    i2s_write(I2S_NUM_0, silenceBuffer, sizeof(silenceBuffer), &bytes_written,
+              0);
+    return;
+  }
+
+  // Step 4: Write PCM data to I2S
+  size_t bytes_written;
+  size_t bytesToWrite = decodedSamples * sizeof(int16_t);
+  i2s_write(I2S_NUM_0, pcmBuffer, bytesToWrite, &bytes_written, portMAX_DELAY);
+
+  if (bytes_written != bytesToWrite) {
+    Serial.printf("[Audio] WARNING: I2S partial write! Expected %u, wrote %u\n",
+                  bytesToWrite, bytes_written);
+  }
+
+  // Success! (Uncomment for debugging - will be very verbose)
+  // Serial.printf("[Audio] Decoded %d samples, wrote %u bytes\n",
+  // decodedSamples, bytes_written);
 }
 
 // ============================================================================

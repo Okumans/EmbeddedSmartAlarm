@@ -3,12 +3,15 @@
 
 #include <Arduino.h>
 #include <LittleFS.h>
+#include <driver/i2s.h>
+#include <opus.h>
 
 #include "AudioFileSourceID3.h"
 #include "AudioFileSourceLittleFS.h"
 #include "AudioGeneratorMP3.h"
 #include "AudioGeneratorWAV.h"
 #include "AudioOutputI2S.h"
+#include "streaming_config.h"
 
 // Forward declarations
 class PubSubClient;
@@ -31,7 +34,16 @@ class AudioManager {
   bool isPlaying;
   float currentVolume;
 
+  // Streaming state
+  AudioState currentState;
+  OpusDecoder* opusDecoder;
+  uint8_t opusPacketBuffer[MAX_OPUS_PACKET_SIZE];
+  int16_t pcmBuffer[OPUS_FRAME_SAMPLES];
+  int16_t silenceBuffer[SILENCE_BUFFER_SIZE];
+  bool prerollComplete;
+
   void cleanup();
+  void cleanupStreaming();
 
   // Internal handler for audio chunks
   bool handleAudioChunk(MQTTManager& mqtt, byte* payload, unsigned int length);
@@ -62,6 +74,12 @@ class AudioManager {
 
   // Update - call this in loop() to keep audio playing
   void loop();
+
+  // Streaming methods
+  bool startStreaming();
+  void stopStreaming();
+  bool isStreaming() const;
+  void processStreamingAudio();  // Called from audio decode task
 
   // Volume control (0.0 to 1.0)
   void setVolume(float volume);

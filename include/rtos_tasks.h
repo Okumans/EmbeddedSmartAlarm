@@ -4,7 +4,10 @@
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <freertos/stream_buffer.h>
 #include <freertos/task.h>
+
+#include "streaming_config.h"
 
 // Task priorities (higher = more important)
 #define PRIORITY_AUDIO_DECODE 2    // High: decode audio for playback
@@ -46,6 +49,9 @@ extern TaskHandle_t displayTaskHandle;
 extern QueueHandle_t audioTxQueue;  // Local mic → WebSocket → Server
 extern QueueHandle_t audioRxQueue;  // Server → WebSocket → Speaker
 extern QueueHandle_t mqttQueue;     // MQTT messages
+
+// StreamBuffer for Opus audio streaming (WebSocket -> Audio Decode)
+extern StreamBufferHandle_t opusStreamBuffer;
 
 // Task functions
 void audioDecodeTask(void* parameter);  // Decode incoming audio & play

@@ -271,6 +271,31 @@ void setupMQTTHandlers() {
       },
       "AudioPlayback", 150);
 
+  // Stream control commands (start/stop streaming)
+  mqtt.registerHandler(
+      "smartalarm/stream/control",
+      [](MQTTManager& mqtt, const char* topic, byte* payload,
+         unsigned int length) -> bool {
+        String command((char*)payload, length);
+        command.toLowerCase();
+
+        if (command == "start") {
+          Serial.println("[MQTT] Received stream START command");
+          bool success = audio.startStreaming();
+          mqtt.publish("smartalarm/stream/status",
+                       success ? "streaming" : "error");
+          return true;
+        } else if (command == "stop") {
+          Serial.println("[MQTT] Received stream STOP command");
+          audio.stopStreaming();
+          mqtt.publish("smartalarm/stream/status", "stopped");
+          return true;
+        }
+
+        return false;
+      },
+      "StreamControl", 150);
+
   // =======================================================================
   // SYSTEM COMMANDS - Normal Priority (100)
   // =======================================================================
@@ -285,6 +310,15 @@ void setupMQTTHandlers() {
         if (message == "stop_audio") {
           audio.stop();
           mqtt.publish("smartalarm/status", "audio_stopped");
+          return true;
+        } else if (message == "stream_start") {
+          bool success = audio.startStreaming();
+          mqtt.publish("smartalarm/status",
+                       success ? "streaming_started" : "stream_error");
+          return true;
+        } else if (message == "stream_stop") {
+          audio.stopStreaming();
+          mqtt.publish("smartalarm/status", "streaming_stopped");
           return true;
         } else if (message == "list_files") {
           audio.listFiles();
@@ -305,7 +339,13 @@ void setupMQTTHandlers() {
           return true;
         } else if (message == "status") {
           String status = "online|audio:";
-          status += audio.playing() ? "playing" : "stopped";
+          if (audio.isStreaming()) {
+            status += "streaming";
+          } else if (audio.playing()) {
+            status += "playing";
+          } else {
+            status += "stopped";
+          }
           status += "|volume:" + String(audio.getVolume(), 2);
           status += "|wifi:" + String(WiFi.RSSI()) + "dBm";
           mqtt.publish("smartalarm/status", status);

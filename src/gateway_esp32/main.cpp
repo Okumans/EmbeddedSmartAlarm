@@ -4,7 +4,6 @@
 #include <Arduino.h>
 #include <DHT.h>
 #include <PubSubClient.h>
-#include <TCA9548A.h>
 #include <WiFi.h>
 #include <Wire.h>
 #include <esp_now.h>
@@ -12,6 +11,8 @@
 
 #include "../../include/mqtt_manager.h"
 #include "../../include/sensor_data.h"
+#include "../../include/sensor_manager.h"
+#include "../../include/task_scheduler.h"
 #include "audio_manager.h"
 
 // ============================================================================
@@ -61,23 +62,20 @@ const char* MQTT_TOPIC_REMOTE_STATUS = "smartalarm/sensor/status";
 // Global Objects
 // ============================================================================
 
-DHT dht(DHTPIN, DHTTYPE);
+SensorManager localSensors(DHTPIN, DHTTYPE);
 TCA9548A tca;
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 MQTTManager mqtt;
 AudioManager audio;
+TaskScheduler scheduler;  // Task scheduler for prioritizing operations
 
 // ============================================================================
 // Global Variables
 // ============================================================================
 
-unsigned long lastSensorRead = 0;
-unsigned long lastMqttPublish = 0;
-float currentTemp = 0.0;
-float currentHumidity = 0.0;
-int animationX = 0;
+int animationX = 0;  // Display animation variable
 
 // Remote sensor data (from NodeMCU via ESP-NOW)
 SensorData remoteSensorData;
@@ -94,10 +92,7 @@ void setupMQTTHandlers();
 void setupESPNow();
 void onESPNowDataReceived(const uint8_t* mac_addr, const uint8_t* data,
                           int data_len);
-void initSensors();
 void initDisplay();
-void readSensors();
-void publishMQTTData();
 void publishRemoteSensorData();
 void updateDisplay();
 
@@ -242,16 +237,12 @@ void setupESPNow() {
 // ============================================================================
 
 void setupMQTT() {
-  // Set larger buffer size for audio chunk upload (default is 256 bytes)
-  // Chunks are 4096 bytes + header, so we need at least 4200 bytes
   mqttClient.setBufferSize(4200);
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
 
-  // Initialize MQTTManager with client ID and status topic
   mqtt.begin(&mqttClient, MQTT_CLIENT_ID, MQTT_TOPIC_STATUS);
   Serial.println("[MQTT] Client configured with 4200 byte buffer");
 
-  // Register all MQTT handlers
   setupMQTTHandlers();
 }
 
@@ -330,22 +321,6 @@ void setupMQTTHandlers() {
   Serial.println("[MQTT] Handler registration complete\n");
 }
 
-void publishMQTTData() {
-  if (!mqtt.isConnected()) {
-    return;
-  }
-
-  char tempStr[10];
-  char humStr[10];
-  dtostrf(currentTemp, 4, 1, tempStr);
-  dtostrf(currentHumidity, 4, 1, humStr);
-
-  mqtt.publish(MQTT_TOPIC_GATEWAY_TEMP, tempStr);
-  mqtt.publish(MQTT_TOPIC_GATEWAY_HUMIDITY, humStr);
-
-  Serial.println("[MQTT] Gateway sensor data published");
-}
-
 // ============================================================================
 // Publish Remote Sensor Data to MQTT
 // ============================================================================
@@ -381,24 +356,6 @@ void publishRemoteSensorData() {
 }
 
 // ============================================================================
-// Sensor Initialization
-// ============================================================================
-
-void initSensors() {
-  Serial.println("[Sensors] Initializing...");
-
-  // Initialize DHT22
-  dht.begin();
-  Serial.println("[Sensors] DHT22 initialized");
-
-  // Initialize I2C Multiplexer
-  tca.begin();
-  Serial.println("[Sensors] TCA9548A initialized");
-
-  // BMP/pressure sensor initialization removed from gateway for now
-}
-
-// ============================================================================
 // Display Initialization
 // ============================================================================
 
@@ -429,23 +386,6 @@ void initDisplay() {
 }
 
 // ============================================================================
-// Sensor Reading
-// ============================================================================
-
-void readSensors() {
-  // // Read DHT22
-  // float temp = dht.readTemperature();
-  // float hum = dht.readHumidity();
-
-  // // Update global variables if readings are valid
-  // if (!isnan(temp)) currentTemp = temp;
-  // if (!isnan(hum)) currentHumidity = hum;
-
-  // Serial.printf("[Sensors] T=%.1f°C, H=%.1f%%, P=%.1fhPa\n", currentTemp,
-  //               currentHumidity, currentPressure);
-}
-
-// ============================================================================
 // Display Update
 // ============================================================================
 
@@ -462,7 +402,8 @@ void updateDisplay() {
   display.println("------------------");
 
   // Local sensor data (left side)
-  display.printf("L:%.0fC %.0f%%", currentTemp, currentHumidity);
+  display.printf("L:%.0fC %.0f%%", localSensors.getTemperature(),
+                 localSensors.getHumidity());
 
   // Remote sensor data indicator (right side)
   if (remoteSensorDataAvailable &&
@@ -517,8 +458,12 @@ void setup() {
   // Initialize I2C
   Wire.begin(SDA_PIN, SCL_PIN);
 
+  // Initialize I2C Multiplexer
+  tca.begin();
+  Serial.println("[System] TCA9548A initialized");
+
   // Initialize components
-  initSensors();
+  localSensors.begin(&tca);
   initDisplay();
 
   // Initialize audio system
@@ -531,14 +476,64 @@ void setup() {
   // Setup ESP-NOW (after WiFi for channel sync)
   setupESPNow();
 
-  // Initial sensor reading
-  readSensors();
+  // Initial display update
   updateDisplay();
 
   Serial.println("\n[System] Setup complete!\n");
   Serial.println("========================================");
   Serial.println("Waiting for sensor data via ESP-NOW...");
   Serial.println("========================================\n");
+
+  // Setup task scheduler with prioritized tasks
+  Serial.println("[Scheduler] Configuring tasks...");
+
+  // CRITICAL: Audio must run every loop for smooth playback
+  scheduler.addTask([]() { audio.loop(); }, TaskScheduler::PRIORITY_CRITICAL,
+                    "Audio");
+
+  // HIGH: MQTT needs frequent processing but not every loop
+  scheduler.addTask([]() { mqtt.loop(); }, TaskScheduler::PRIORITY_HIGH,
+                    "MQTT");
+
+  // MEDIUM: Sensor reading every 2 seconds
+  scheduler.addTask(
+      []() {
+        static unsigned long lastSensorRead = 0;
+        unsigned long now = millis();
+        if (now - lastSensorRead >= SENSOR_READ_INTERVAL) {
+          lastSensorRead = now;
+          localSensors.readSensors();
+          updateDisplay();
+        }
+      },
+      TaskScheduler::PRIORITY_LOW, "Sensors");
+
+  // LOW: MQTT publishing every 10 seconds
+  scheduler.addTask(
+      []() {
+        static unsigned long lastMqttPublish = 0;
+        unsigned long now = millis();
+        if (now - lastMqttPublish >= MQTT_PUBLISH_INTERVAL) {
+          lastMqttPublish = now;
+          localSensors.publishToMQTT(mqtt, MQTT_TOPIC_GATEWAY_TEMP,
+                                     MQTT_TOPIC_GATEWAY_HUMIDITY);
+          publishRemoteSensorData();
+        }
+      },
+      TaskScheduler::PRIORITY_LOW, "MQTT Publish");
+
+  // LOW: WiFi reconnection check
+  scheduler.addTask(
+      []() {
+        if (WiFi.status() != WL_CONNECTED) {
+          Serial.println("[WiFi] Connection lost, reconnecting...");
+          setupWiFi();
+        }
+      },
+      TaskScheduler::PRIORITY_LOW, "WiFi Check");
+
+  scheduler.printStatus();
+  Serial.println("[Scheduler] Task scheduler ready!");
 }
 
 // ============================================================================
@@ -546,30 +541,10 @@ void setup() {
 // ============================================================================
 
 void loop() {
-  unsigned long currentMillis = millis();
-
-  // Maintain WiFi connection
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFi] Connection lost, reconnecting...");
-    setupWiFi();
-  }
-
-  // MQTT Manager handles connection and message processing
-  mqtt.loop();
-
-  // Handle audio playback
-  audio.loop();
-
-  // Read sensors periodically
-  if (currentMillis - lastSensorRead >= SENSOR_READ_INTERVAL) {
-    lastSensorRead = currentMillis;
-    readSensors();
-    updateDisplay();
-  }
-
-  // Publish data to MQTT periodically
-  if (currentMillis - lastMqttPublish >= MQTT_PUBLISH_INTERVAL) {
-    lastMqttPublish = currentMillis;
-    publishMQTTData();
-  }
+  // Run all scheduled tasks with proper priorities
+  // Audio (CRITICAL) runs every loop
+  // MQTT (HIGH) runs every 5ms
+  // Sensors (MEDIUM) run every 10ms
+  // MQTT Publish & WiFi Check (LOW) run every 100ms
+  scheduler.run();
 }

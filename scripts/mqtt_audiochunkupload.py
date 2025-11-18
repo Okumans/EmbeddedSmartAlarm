@@ -68,7 +68,7 @@ def request_free_space(client):
     client.publish(TOPIC_REQUEST, "REQUEST_FREE_SPACE")
 
     # Wait for response
-    for _ in range(30):  # wait max 3 seconds
+    for _ in range(190):  # wait max 3 seconds
         if free_space_reply is not None:
             return free_space_reply, current_audio_size
         time.sleep(0.1)

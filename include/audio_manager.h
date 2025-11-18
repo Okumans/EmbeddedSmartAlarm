@@ -10,9 +10,9 @@
 #include "AudioGeneratorWAV.h"
 #include "AudioOutputI2S.h"
 
-// Forward declare PubSubClient to avoid including its header in this public
-// header
+// Forward declarations
 class PubSubClient;
+class MQTTManager;
 
 // I2S Configuration
 #define I2S_BCLK 26
@@ -26,13 +26,17 @@ class AudioManager {
   AudioFileSourceID3* id3;
   AudioGeneratorWAV* wav;
   AudioGeneratorMP3* mp3;
-  PubSubClient* mqttClientPtr;
 
   bool initialized;
   bool isPlaying;
   float currentVolume;
 
   void cleanup();
+
+  // Internal handler for audio chunks
+  bool handleAudioChunk(MQTTManager& mqtt, byte* payload, unsigned int length);
+  bool handleAudioRequest(MQTTManager& mqtt, byte* payload,
+                          unsigned int length);
 
  public:
   AudioManager();
@@ -72,12 +76,8 @@ class AudioManager {
   // Get SPIFFS info
   void printSPIFFSInfo();
 
-  // Inject shared MQTT client (from main) so AudioManager can publish/subscribe
-  void setMQTTClient(PubSubClient* client);
-
-  // Handle MQTT messages forwarded from the global callback in main.cpp.
-  // Returns true if the message was handled by AudioManager.
-  bool handleMQTTMessage(const char* topic, byte* payload, unsigned int length);
+  // Register MQTT handlers with the manager
+  void registerMQTTHandlers(MQTTManager& mqtt);
 };
 
 #endif  // AUDIO_MANAGER_H

@@ -10,6 +10,7 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 
+#include "../../include/mqtt_manager.h"
 #include "../../include/sensor_data.h"
 #include "audio_manager.h"
 
@@ -65,6 +66,7 @@ TCA9548A tca;
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
+MQTTManager mqtt;
 AudioManager audio;
 
 // ============================================================================
@@ -88,9 +90,8 @@ unsigned long lastRemoteDataReceived = 0;
 
 void setupWiFi();
 void setupMQTT();
+void setupMQTTHandlers();
 void setupESPNow();
-void reconnectMQTT();
-void mqttCallback(char* topic, byte* payload, unsigned int length);
 void onESPNowDataReceived(const uint8_t* mac_addr, const uint8_t* data,
                           int data_len);
 void initSensors();
@@ -107,12 +108,8 @@ void updateDisplay();
 void setupWiFi() {
   Serial.println("\n[WiFi] Configuring WiFi...");
 
-  // CRITICAL: Set to AP+STA mode for ESP-NOW to work properly
-  // The gateway acts as both an Access Point (for ESP-NOW) and Station (for
-  // internet)
   WiFi.mode(WIFI_AP_STA);
 
-  // First, connect to WiFi network to get the channel
   Serial.println(
       "[WiFi] Connecting to WiFi network first to detect channel...");
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -155,7 +152,9 @@ void setupWiFi() {
   // Now create Soft Access Point on the SAME channel as WiFi
   Serial.println("\n[WiFi] Creating Soft Access Point...");
   WiFi.softAP(SOFT_AP_SSID, SOFT_AP_PASSWORD, wifiChannel, 0);
+
   IPAddress apIP = WiFi.softAPIP();
+
   Serial.print("[WiFi] ✓ Soft AP Created: ");
   Serial.println(SOFT_AP_SSID);
   Serial.print("[WiFi] AP IP Address: ");
@@ -247,90 +246,92 @@ void setupMQTT() {
   // Chunks are 4096 bytes + header, so we need at least 4200 bytes
   mqttClient.setBufferSize(4200);
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
-  mqttClient.setCallback(mqttCallback);
+
+  // Initialize MQTTManager with client ID and status topic
+  mqtt.begin(&mqttClient, MQTT_CLIENT_ID, MQTT_TOPIC_STATUS);
   Serial.println("[MQTT] Client configured with 4200 byte buffer");
+
+  // Register all MQTT handlers
+  setupMQTTHandlers();
 }
 
-void reconnectMQTT() {
-  if (!mqttClient.connected()) {
-    Serial.print("[MQTT] Attempting connection...");
+void setupMQTTHandlers() {
+  Serial.println("\n[MQTT] Registering message handlers...");
 
-    if (mqttClient.connect(MQTT_CLIENT_ID)) {
-      Serial.println("connected!");
-      mqttClient.publish(MQTT_TOPIC_STATUS, "online");
-      // Subscribe to command topics
-      mqttClient.subscribe("smartalarm/commands");
-      mqttClient.subscribe("smartalarm/play_audio");
-      // Subscribe to audio upload topics used by AudioManager
-      mqttClient.subscribe("esp32/audio_request");
-      mqttClient.subscribe("esp32/audio_chunk");
-      Serial.println("[MQTT] Subscribed to command topics");
-    } else {
-      Serial.print("failed, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(" retrying in 5 seconds");
-    }
-  }
-}
+  // =======================================================================
+  // AUDIO HANDLERS - High Priority (150)
+  // =======================================================================
 
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("[MQTT] Message received on topic: ");
-  Serial.println(topic);
-  Serial.printf("[MQTT] Message length: %u bytes\n", length);
+  // Audio playback command
+  mqtt.registerHandler(
+      "smartalarm/play_audio",
+      [](MQTTManager& mqtt, const char* topic, byte* payload,
+         unsigned int length) -> bool {
+        String filename((char*)payload, length);
+        if (!filename.startsWith("/")) {
+          filename = "/" + filename;
+        }
 
-  // Let AudioManager handle audio-upload topics first
-  if (String(topic) == "esp32/audio_request" ||
-      String(topic) == "esp32/audio_chunk") {
-    if (audio.handleMQTTMessage(topic, payload, length)) return;
-  }
+        bool success = audio.playFile(filename.c_str());
+        mqtt.publish("smartalarm/audio/status", success ? "playing" : "error");
 
-  // Convert payload to string
-  String message;
-  for (unsigned int i = 0; i < length; i++) {
-    message += (char)payload[i];
-  }
-  Serial.print("[MQTT] Payload: ");
-  Serial.println(message);
+        return true;
+      },
+      "AudioPlayback", 150);
 
-  // Handle incoming MQTT messages
-  String topicStr = String(topic);
+  // =======================================================================
+  // SYSTEM COMMANDS - Normal Priority (100)
+  // =======================================================================
 
-  if (topicStr == "smartalarm/play_audio") {
-    // Play audio file from SPIFFS
-    // Example: /alarm1.mp3 or /wake_up.wav
-    String filename = message;
-    if (!filename.startsWith("/")) {
-      filename = "/" + filename;
-    }
-    audio.playFile(filename.c_str());
+  mqtt.registerHandler(
+      "smartalarm/commands",
+      [](MQTTManager& mqtt, const char* topic, byte* payload,
+         unsigned int length) -> bool {
+        String message((char*)payload, length);
+        message.toLowerCase();
 
-  } else if (topicStr == "smartalarm/commands") {
-    message.toLowerCase();
+        if (message == "stop_audio") {
+          audio.stop();
+          mqtt.publish("smartalarm/status", "audio_stopped");
+          return true;
+        } else if (message == "list_files") {
+          audio.listFiles();
+          mqtt.publish("smartalarm/status", "files_listed");
+          return true;
+        } else if (message.startsWith("volume=")) {
+          float vol = message.substring(7).toFloat();
+          audio.setVolume(vol);
+          mqtt.publish("smartalarm/status", "volume:" + String(vol, 2));
+          return true;
+        } else if (message.startsWith("play:")) {
+          String filename = message.substring(5);
+          if (!filename.startsWith("/")) {
+            filename = "/" + filename;
+          }
+          bool success = audio.playFile(filename.c_str());
+          mqtt.publish("smartalarm/status", success ? "playing" : "error");
+          return true;
+        } else if (message == "status") {
+          String status = "online|audio:";
+          status += audio.playing() ? "playing" : "stopped";
+          status += "|volume:" + String(audio.getVolume(), 2);
+          status += "|wifi:" + String(WiFi.RSSI()) + "dBm";
+          mqtt.publish("smartalarm/status", status);
+          return true;
+        }
 
-    if (message == "stop_audio") {
-      audio.stop();
+        return false;  // Not handled by this handler
+      },
+      "SystemCommands", 100);
 
-    } else if (message == "list_files") {
-      audio.listFiles();
+  // Register AudioManager's own handlers
+  audio.registerMQTTHandlers(mqtt);
 
-    } else if (message.startsWith("volume=")) {
-      // Set volume: volume=0.5
-      float vol = message.substring(7).toFloat();
-      audio.setVolume(vol);
-
-    } else if (message.startsWith("play:")) {
-      // Play specific file: play:/alarm.mp3
-      String filename = message.substring(5);
-      if (!filename.startsWith("/")) {
-        filename = "/" + filename;
-      }
-      audio.playFile(filename.c_str());
-    }
-  }
+  Serial.println("[MQTT] Handler registration complete\n");
 }
 
 void publishMQTTData() {
-  if (!mqttClient.connected()) {
+  if (!mqtt.isConnected()) {
     return;
   }
 
@@ -339,8 +340,8 @@ void publishMQTTData() {
   dtostrf(currentTemp, 4, 1, tempStr);
   dtostrf(currentHumidity, 4, 1, humStr);
 
-  mqttClient.publish(MQTT_TOPIC_GATEWAY_TEMP, tempStr);
-  mqttClient.publish(MQTT_TOPIC_GATEWAY_HUMIDITY, humStr);
+  mqtt.publish(MQTT_TOPIC_GATEWAY_TEMP, tempStr);
+  mqtt.publish(MQTT_TOPIC_GATEWAY_HUMIDITY, humStr);
 
   Serial.println("[MQTT] Gateway sensor data published");
 }
@@ -350,7 +351,7 @@ void publishMQTTData() {
 // ============================================================================
 
 void publishRemoteSensorData() {
-  if (!mqttClient.connected() || !remoteSensorDataAvailable) {
+  if (!mqtt.isConnected() || !remoteSensorDataAvailable) {
     return;
   }
 
@@ -366,15 +367,15 @@ void publishRemoteSensorData() {
   dtostrf(remoteSensorData.uvIndex, 5, 2, uvStr);
   snprintf(battStr, sizeof(battStr), "%d", remoteSensorData.batteryLevel);
 
-  mqttClient.publish(MQTT_TOPIC_REMOTE_TEMP, tempStr);
-  mqttClient.publish(MQTT_TOPIC_REMOTE_HUMIDITY, humStr);
-  mqttClient.publish(MQTT_TOPIC_REMOTE_PRESSURE, pressStr);
-  mqttClient.publish(MQTT_TOPIC_REMOTE_UV, uvStr);
-  mqttClient.publish(MQTT_TOPIC_REMOTE_BATTERY, battStr);
+  mqtt.publish(MQTT_TOPIC_REMOTE_TEMP, tempStr);
+  mqtt.publish(MQTT_TOPIC_REMOTE_HUMIDITY, humStr);
+  mqtt.publish(MQTT_TOPIC_REMOTE_PRESSURE, pressStr);
+  mqtt.publish(MQTT_TOPIC_REMOTE_UV, uvStr);
+  mqtt.publish(MQTT_TOPIC_REMOTE_BATTERY, battStr);
 
   // Publish status with device name
   String statusMsg = String(remoteSensorData.deviceName) + " online";
-  mqttClient.publish(MQTT_TOPIC_REMOTE_STATUS, statusMsg.c_str());
+  mqtt.publish(MQTT_TOPIC_REMOTE_STATUS, statusMsg);
 
   Serial.println("[MQTT] → Remote sensor data forwarded to MQTT broker");
 }
@@ -527,10 +528,6 @@ void setup() {
   setupWiFi();
   setupMQTT();
 
-  // Inject the gateway's shared MQTT client into AudioManager so it can
-  // publish responses and receive forwarded messages.
-  audio.setMQTTClient(&mqttClient);
-
   // Setup ESP-NOW (after WiFi for channel sync)
   setupESPNow();
 
@@ -557,13 +554,8 @@ void loop() {
     setupWiFi();
   }
 
-  // Maintain MQTT connection
-  if (WiFi.status() == WL_CONNECTED && !mqttClient.connected()) {
-    reconnectMQTT();
-  }
-
-  // Process MQTT messages
-  mqttClient.loop();
+  // MQTT Manager handles connection and message processing
+  mqtt.loop();
 
   // Handle audio playback
   audio.loop();
@@ -580,6 +572,4 @@ void loop() {
     lastMqttPublish = currentMillis;
     publishMQTTData();
   }
-
-  delay(10);  // Small delay to prevent watchdog issues
 }

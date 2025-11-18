@@ -2,13 +2,7 @@
 #define AUDIO_MANAGER_H
 
 #include <Arduino.h>
-
-// ESP8266 and ESP32 use different filesystem headers
-#ifdef ESP8266
-#include <FS.h>
-#else
 #include <LittleFS.h>
-#endif
 
 #include "AudioFileSourceID3.h"
 #include "AudioFileSourceLittleFS.h"
@@ -16,7 +10,8 @@
 #include "AudioGeneratorWAV.h"
 #include "AudioOutputI2S.h"
 
-// Forward declare PubSubClient to avoid including its header in this public header
+// Forward declare PubSubClient to avoid including its header in this public
+// header
 class PubSubClient;
 
 // I2S Configuration
@@ -45,7 +40,6 @@ class AudioManager {
 
   // Initialize audio system and SPIFFS
   bool begin();
-
 
   // Stop and cleanup
   void end();

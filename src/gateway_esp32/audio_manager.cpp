@@ -1,11 +1,10 @@
 #include "audio_manager.h"
 
 // MQTT / WiFi for remote file upload
+#include <LittleFS.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
-#ifndef ESP8266
-#include <LittleFS.h>
-#endif
+
 // ---------------- MQTT TOPICS ----------------
 // (audio topics centralized in include/config.h; legacy defines kept for
 // backward compatibility in case other modules still use them)
@@ -77,15 +76,6 @@ bool AudioManager::begin() {
 
   Serial.println("[Audio] Initializing filesystem...");
 
-// Initialize filesystem (ESP8266 uses SPIFFS, ESP32 uses LittleFS)
-#ifdef ESP8266
-  if (!SPIFFS.begin()) {
-    Serial.println("[Audio] SPIFFS Mount Failed");
-    return false;
-  }
-  Serial.println("[Audio] SPIFFS mounted successfully");
-  printSPIFFSInfo();
-#else
   Serial.println("[Audio] Mounting LittleFS (will format if needed)...");
   // Try mounting first. If mount fails, attempt a format then remount.
   if (!LittleFS.begin()) {
@@ -102,9 +92,6 @@ bool AudioManager::begin() {
   }
   Serial.println("[Audio] LittleFS mounted successfully");
   printSPIFFSInfo();
-
-#endif
-
   // Initialize I2S output
   Serial.println("[Audio] Initializing I2S output...");
   out = new AudioOutputI2S();
@@ -131,11 +118,7 @@ void AudioManager::end() {
     out = nullptr;
   }
 
-#ifdef ESP8266
-  SPIFFS.end();
-#else
   LittleFS.end();
-#endif
   initialized = false;
   Serial.println("[Audio] Audio system stopped");
 }
@@ -149,18 +132,11 @@ bool AudioManager::playFile(const char* filename) {
   // Stop any currently playing audio
   stop();
 
-// Check if file exists
-#ifdef ESP8266
-  if (!SPIFFS.exists(filename)) {
-    Serial.printf("[Audio] File not found: %s\n", filename);
-    return false;
-  }
-#else
+  // Check if file exists
   if (!LittleFS.exists(filename)) {
     Serial.printf("[Audio] File not found: %s\n", filename);
     return false;
   }
-#endif
 
   // Determine file type by extension
   String fname = String(filename);
@@ -186,12 +162,7 @@ bool AudioManager::playWAV(const char* filename) {
 
   Serial.printf("[Audio] Playing WAV: %s\n", filename);
 
-  // Use LittleFS-backed audio source on ESP32, SPIFFS on ESP8266
-#ifdef ESP8266
-  file = new AudioFileSourceSPIFFS(filename);
-#else
   file = new AudioFileSourceLittleFS(filename);
-#endif
   wav = new AudioGeneratorWAV();
 
   if (wav->begin(file, out)) {
@@ -214,12 +185,7 @@ bool AudioManager::playMP3(const char* filename) {
 
   Serial.printf("[Audio] Playing MP3: %s\n", filename);
 
-  // Use LittleFS-backed audio source on ESP32, SPIFFS on ESP8266
-#ifdef ESP8266
-  file = new AudioFileSourceSPIFFS(filename);
-#else
   file = new AudioFileSourceLittleFS(filename);
-#endif
   id3 = new AudioFileSourceID3(file);
   mp3 = new AudioGeneratorMP3();
 
@@ -291,18 +257,6 @@ void AudioManager::listFiles() {
   Serial.println("[Audio] Files in filesystem:");
   Serial.println("----------------------------------------");
 
-#ifdef ESP8266
-  Dir dir = SPIFFS.openDir("/");
-  int count = 0;
-  while (dir.next()) {
-    String filename = dir.fileName();
-    if (filename.endsWith(".wav") || filename.endsWith(".mp3") ||
-        filename.endsWith(".WAV") || filename.endsWith(".MP3")) {
-      Serial.printf("  %s (%d bytes)\n", filename.c_str(), dir.fileSize());
-      count++;
-    }
-  }
-#else
   File root = LittleFS.open("/");
   File file = root.openNextFile();
   int count = 0;
@@ -317,7 +271,6 @@ void AudioManager::listFiles() {
     }
     file = root.openNextFile();
   }
-#endif
 
   if (count == 0) {
     Serial.println("  No audio files found");
@@ -328,21 +281,10 @@ void AudioManager::listFiles() {
 }
 
 void AudioManager::printSPIFFSInfo() {
-#ifdef ESP8266
-  FSInfo fs_info;
-  SPIFFS.info(fs_info);
-  size_t totalBytes = fs_info.totalBytes;
-  size_t usedBytes = fs_info.usedBytes;
-#else
   size_t totalBytes = LittleFS.totalBytes();
   size_t usedBytes = LittleFS.usedBytes();
-#endif
 
-#ifdef ESP8266
-  Serial.println("[Audio] SPIFFS Info:");
-#else
   Serial.println("[Audio] LittleFS Info:");
-#endif
   Serial.printf("  Total: %d bytes (%.2f MB)\n", totalBytes,
                 totalBytes / (1024.0 * 1024.0));
   Serial.printf("  Used:  %d bytes (%.2f MB)\n", usedBytes,
@@ -350,25 +292,6 @@ void AudioManager::printSPIFFSInfo() {
   Serial.printf("  Free:  %d bytes (%.2f MB)\n", totalBytes - usedBytes,
                 (totalBytes - usedBytes) / (1024.0 * 1024.0));
   Serial.printf("  Usage: %.1f%%\n", (usedBytes * 100.0) / totalBytes);
-}
-
-// ---------------- WiFi / MQTT helpers ----------------
-void setup_wifi() {
-  delay(100);
-  Serial.println();
-  Serial.printf("Connecting to %s\n", WIFI_SSID);
-
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(300);
-    Serial.print(".");
-  }
-
-  Serial.println("\nWiFi connected");
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
 }
 
 // Helper: parse numeric substring from payload
@@ -396,31 +319,12 @@ bool AudioManager::handleMQTTMessage(const char* topic, byte* payload,
   if (topicStr == TOPIC_REQUEST) {
     const char req[] = "REQUEST_FREE_SPACE";
     if (length == (sizeof(req) - 1) && memcmp(payload, req, length) == 0) {
-      size_t total =
-#ifdef ESP8266
-          SPIFFS.totalBytes();
-#else
-          LittleFS.totalBytes();
-#endif
-      size_t used =
-#ifdef ESP8266
-          SPIFFS.usedBytes();
-#else
-          LittleFS.usedBytes();
-#endif
+      size_t total = LittleFS.totalBytes();
+      size_t used = LittleFS.usedBytes();
       size_t freeSpace = total - used;
 
       // Check if current audio file exists and get its size
       size_t currentAudioSize = 0;
-#ifdef ESP8266
-      if (SPIFFS.exists(recvFilename)) {
-        File f = SPIFFS.open(recvFilename, "r");
-        if (f) {
-          currentAudioSize = f.size();
-          f.close();
-        }
-      }
-#else
       if (LittleFS.exists(recvFilename)) {
         File f = LittleFS.open(recvFilename, "r");
         if (f) {
@@ -428,7 +332,6 @@ bool AudioManager::handleMQTTMessage(const char* topic, byte* payload,
           f.close();
         }
       }
-#endif
 
       // Send response: FREE:<freeSpace>:<currentAudioSize>
       String reply =
@@ -458,39 +361,21 @@ bool AudioManager::handleMQTTMessage(const char* topic, byte* payload,
                   expectedSize);
 
     // Delete old file
-    if (
-#ifdef ESP8266
-        SPIFFS.exists(recvFilename)
-#else
-        LittleFS.exists(recvFilename)
-#endif
-    ) {
-#ifdef ESP8266
-      SPIFFS.remove(recvFilename);
-#else
+    if (LittleFS.exists(recvFilename)) {
       LittleFS.remove(recvFilename);
-#endif
       Serial.println("[Audio] Old file removed.");
     }
 
-#ifdef ESP8266
-    fsFile = SPIFFS.open(recvFilename, "w");
-#else
     fsFile = LittleFS.open(recvFilename, "w");
-#endif
     if (!fsFile) {
       Serial.println("[Audio] ERROR: Could not open file for writing.");
-#ifdef ESP8266
-      size_t freeBytes = SPIFFS.totalBytes() - SPIFFS.usedBytes();
-      Serial.printf("[Audio] SPIFFS free: %u bytes\n", freeBytes);
-#else
       size_t total = LittleFS.totalBytes();
       size_t used = LittleFS.usedBytes();
       size_t freeBytes = total - used;
       Serial.printf("[Audio] LittleFS total=%u used=%u free=%u\n", total, used,
                     freeBytes);
 
-      // If no free space, attempt a format and retry (ESP32 only)
+      // If no free space, attempt a format and retry
       if (freeBytes == 0) {
         Serial.println(
             "[Audio] No free space — attempting LittleFS.format() and retry");
@@ -517,12 +402,10 @@ bool AudioManager::handleMQTTMessage(const char* topic, byte* payload,
           return true;
         }
       }
-#endif
 
       receivingFile = false;
       return true;
     }
-
     Serial.printf("[Audio] File opened successfully: %s\n",
                   recvFilename.c_str());
     Serial.printf("[Audio] Ready to receive %u bytes\n", expectedSize);
@@ -607,11 +490,4 @@ bool AudioManager::handleMQTTMessage(const char* topic, byte* payload,
   }
 
   return false;
-}
-
-void mqttReconnect() {
-  // Reconnection is handled by the gateway's central MQTT logic.
-  // AudioManager uses the shared client; it must not attempt its own
-  // connection here. Keep this function as a no-op for compatibility.
-  return;
 }

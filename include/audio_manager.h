@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <LittleFS.h>
+#include <WiFiUdp.h>
 #include <driver/i2s.h>
 #include <opus.h>
 
@@ -21,6 +22,14 @@ class MQTTManager;
 #define I2S_LRC 25
 #define I2S_DOUT 27
 
+// Audio modes
+enum AudioMode { MODE_IDLE, MODE_FILE, MODE_STREAM_RX };
+
+// ADPCM Configuration
+#define ADPCM_SAMPLE_RATE 16000
+#define ADPCM_BLOCK_SIZE 256  // Samples per block
+#define UDP_PORT 12345
+
 class AudioManager {
  private:
   AudioOutputI2S* out;
@@ -32,6 +41,13 @@ class AudioManager {
   bool initialized;
   bool isPlaying;
   float currentVolume;
+
+  // Stream mode variables
+  AudioMode currentMode;
+  WiFiUDP udp;
+  bool streamActive;
+  int16_t adpcmPredictor;
+  int16_t adpcmStepIndex;
 
   void cleanup();
 
@@ -71,6 +87,15 @@ class AudioManager {
 
   // Check if audio is currently playing
   bool playing();
+
+  // Stream mode methods
+  bool beginStreamRX(int port = UDP_PORT);
+  void stopStream();
+  void processStream();
+
+  // ADPCM decoder
+  void initADPCM();
+  int16_t decodeADPCMNibble(uint8_t nibble);
 
   // List all audio files in SPIFFS
   void listFiles();

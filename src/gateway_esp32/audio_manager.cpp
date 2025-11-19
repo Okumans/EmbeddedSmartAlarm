@@ -3,6 +3,7 @@
 // MQTT Manager for remote file upload
 #include <LittleFS.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <freertos/FreeRTOS.h>
 
 #include "../../include/mqtt_manager.h"
@@ -22,14 +23,17 @@ size_t expectedSize = 0;
 size_t receivedSize = 0;
 unsigned long lastChunkTime = 0;  // Track upload timeout
 
-AudioManager::AudioManager() {
-  out = nullptr;
-  file = nullptr;
-  id3 = nullptr;
-  mp3 = nullptr;
-  initialized = false;
-  isPlaying = false;
-  currentVolume = 0.5;
+AudioManager::AudioManager()
+    : out{nullptr},
+      file{nullptr},
+      id3{nullptr},
+      mp3{nullptr},
+      initialized{nullptr},
+      isPlaying{false},
+      currentVolume{0.5},
+      currentMode{MODE_IDLE},
+      streamActive{false} {
+  initADPCM();
 }
 
 AudioManager::~AudioManager() { cleanup(); }
@@ -40,14 +44,17 @@ void AudioManager::cleanup() {
     delete mp3;
     mp3 = nullptr;
   }
+
   if (id3) {
     delete id3;
     id3 = nullptr;
   }
+
   if (file) {
     delete file;
     file = nullptr;
   }
+
   isPlaying = false;
 }
 
@@ -279,6 +286,154 @@ void AudioManager::registerMQTTHandlers(MQTTManager& mqtt) {
   );
 
   Serial.println("[Audio] MQTT handlers registered");
+}
+
+// ============================================================================
+// STREAM MODE METHODS
+// ============================================================================
+
+bool AudioManager::beginStreamRX(int port) {
+  if (!initialized) {
+    Serial.println("[Audio] Not initialized!");
+    return false;
+  }
+
+  if (streamActive) {
+    Serial.println("[Audio] Stream already active");
+    return true;
+  }
+
+  Serial.printf("[Audio] Starting UDP listener on port %d\n", port);
+  if (udp.begin(port)) {
+    streamActive = true;
+    currentMode = MODE_STREAM_RX;
+    initADPCM();
+    // Configure I2S for ADPCM streaming: 16kHz, 16-bit, Stereo
+    if (out) {
+      out->stop();          // Stop any previous playback to reset buffers
+      out->SetRate(16000);  // Set Sample Rate for ADPCM
+      out->begin();         // Restart the I2S driver with new settings
+      Serial.println("[Audio] I2S Re-configured: 16kHz for ADPCM streaming");
+    }
+    Serial.println("[Audio] Stream RX mode activated");
+    return true;
+  } else {
+    Serial.println("[Audio] Failed to start UDP listener");
+    return false;
+  }
+}
+
+void AudioManager::stopStream() {
+  if (streamActive) {
+    udp.stop();
+    streamActive = false;
+    currentMode = MODE_IDLE;
+    // Reset I2S to default settings for MP3 playback
+    if (out) {
+      out->stop();          // Stop streaming playback
+      out->SetRate(44100);  // Reset to MP3 sample rate
+      out->begin();         // Restart the I2S driver with MP3 settings
+      Serial.println("[Audio] I2S reset to 44.1kHz for MP3 playback");
+    }
+    Serial.println("[Audio] Stream stopped");
+  }
+}
+
+void AudioManager::processStream() {
+  if (!streamActive || !initialized) {
+    return;
+  }
+
+  int packetSize = udp.parsePacket();
+  if (packetSize > 0) {
+    Serial.printf("[Audio] Received UDP packet: %d bytes\n", packetSize);
+    // Read UDP packet
+    uint8_t buffer[512];
+    int len = udp.read(buffer, sizeof(buffer));
+    if (len > 0) {
+      Serial.printf("[Audio] Processing %d bytes of ADPCM data\n", len);
+      // Decode ADPCM and play - limit processing to avoid stack overflow
+      int maxSamples =
+          256;  // Process max 256 samples per call to prevent blocking
+      for (int i = 0; i < len && i < maxSamples; i++) {
+        // Each byte contains 2 nibbles (4-bit ADPCM samples)
+        int16_t sample1 = decodeADPCMNibble(buffer[i] >> 4);
+        int16_t sample2 = decodeADPCMNibble(buffer[i] & 0x0F);
+
+        // Debug: Check if decoder is producing valid samples (much less
+        // frequent)
+        static int debug_count = 0;
+        if (debug_count++ % 5000 == 0) {  // Every 5000 samples instead of 1000
+          Serial.printf("[Debug] PCM Samples: %d, %d\n", sample1, sample2);
+        }
+
+        if (out) {
+          // Send mono samples to BOTH Left and Right channels for stereo I2S
+          out->ConsumeSample(&sample1);  // Left channel
+          out->ConsumeSample(&sample1);  // Right channel
+          out->ConsumeSample(&sample2);  // Left channel
+          out->ConsumeSample(&sample2);  // Right channel
+        }
+      }
+
+      // If we processed the full packet, check for more packets
+      if (len >= 512) {
+        // Yield to prevent blocking the RTOS task
+        vTaskDelay(pdMS_TO_TICKS(1));
+      }
+    }
+  }
+}
+
+// ============================================================================
+// ADPCM DECODER
+// ============================================================================
+
+void AudioManager::initADPCM() {
+  adpcmPredictor = 0;
+  adpcmStepIndex = 0;
+}
+
+int16_t AudioManager::decodeADPCMNibble(uint8_t nibble) {
+  // IMA ADPCM step table
+  static const int16_t stepTable[89] = {
+      7,     8,     9,     10,    11,    12,    13,    14,    16,    17,
+      19,    21,    23,    25,    28,    31,    34,    37,    41,    45,
+      50,    55,    60,    66,    73,    80,    88,    97,    107,   118,
+      130,   143,   157,   173,   190,   209,   230,   253,   279,   307,
+      337,   371,   408,   449,   494,   544,   598,   658,   724,   796,
+      876,   963,   1060,  1166,  1282,  1411,  1552,  1707,  1878,  2066,
+      2272,  2499,  2749,  3024,  3327,  3660,  4026,  4428,  4871,  5358,
+      5894,  6484,  7132,  7845,  8630,  9493,  10442, 11487, 12635, 13899,
+      15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767};
+
+  // IMA ADPCM index table
+  static const int8_t indexTable[16] = {-1, -1, -1, -1, 2, 4, 6, 8,
+                                        -1, -1, -1, -1, 2, 4, 6, 8};
+
+  int16_t step = stepTable[adpcmStepIndex];
+  int16_t diff = step >> 3;
+
+  if (nibble & 4) diff += step;
+  if (nibble & 2) diff += step >> 1;
+  if (nibble & 1) diff += step >> 2;
+
+  if (nibble & 8) {
+    adpcmPredictor -= diff;
+  } else {
+    adpcmPredictor += diff;
+  }
+
+  // Clamp predictor
+  if (adpcmPredictor > 32767) adpcmPredictor = 32767;
+  if (adpcmPredictor < -32768) adpcmPredictor = -32768;
+
+  // Update step index
+  adpcmStepIndex += indexTable[nibble];
+  if (adpcmStepIndex < 0) adpcmStepIndex = 0;
+  if (adpcmStepIndex > 88) adpcmStepIndex = 88;
+
+  return adpcmPredictor;
 }
 
 // ============================================================================

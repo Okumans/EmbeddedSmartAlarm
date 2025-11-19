@@ -25,16 +25,22 @@ QueueHandle_t audioRxQueue = NULL;
 QueueHandle_t mqttQueue = NULL;
 
 // ============================================================================
-// AUDIO DECODE TASK - Play incoming audio stream
+// AUDIO DECODE TASK - Play incoming audio stream or file
 // ============================================================================
 void audioDecodeTask(void* parameter) {
   Serial.println("[RTOS] Audio Decode Task started on Core 1");
 
-  // This task will be suspended until streaming is enabled
-  vTaskSuspend(NULL);
-
   for (;;) {
-    vTaskDelay(pdMS_TO_TICKS(10));  // 10ms for MP3 playback
+    // Check current audio mode
+    if (audio.playing()) {
+      // File playback mode - handle MP3/WAV
+      audio.loop();
+      vTaskDelay(pdMS_TO_TICKS(10));  // 10ms for MP3 playback
+    } else {
+      // Check if stream mode is active
+      audio.processStream();
+      vTaskDelay(pdMS_TO_TICKS(5));  // 5ms for low latency streaming
+    }
   }
 }
 
@@ -44,12 +50,8 @@ void audioDecodeTask(void* parameter) {
 void audioEncodeTask(void* parameter) {
   Serial.println("[RTOS] Audio Encode Task started on Core 1");
 
-  // This task will be suspended until streaming is enabled
-  vTaskSuspend(NULL);
-
-  for (;;) {
-    vTaskDelay(pdMS_TO_TICKS(20));  // 20ms frames
-  }
+  // Reserved for future INMP441 Microphone implementation
+  vTaskDelete(NULL);
 }
 
 // ============================================================================

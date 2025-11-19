@@ -478,10 +478,11 @@ void setup() {
 
   // Initialize audio system
   audio.begin();
-
+  
   // Setup WiFi and MQTT
   setupWiFi();
   setupMQTT();
+  audio.beginStreamRX();
 
   // Setup ESP-NOW (after WiFi for channel sync)
   setupESPNow();

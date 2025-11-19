@@ -15,27 +15,16 @@ MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
 MQTT_CLIENT_ID = "SmartAlarmClock_Subscriber"
 
-# Topics to subscribe to
+# Topics to subscribe to (using wildcards)
 TOPICS = [
-    # Gateway (local) sensor topics
-    "smartalarm/gateway/temperature",
-    "smartalarm/gateway/humidity",
-    "smartalarm/gateway/pressure",
-    "smartalarm/gateway/status",
-    # Remote sensor topics (via ESP-NOW)
-    "smartalarm/sensor/temperature",
-    "smartalarm/sensor/humidity",
-    "smartalarm/sensor/pressure",
-    "smartalarm/sensor/uvindex",
-    "smartalarm/sensor/battery",
-    "smartalarm/sensor/status",
+    "smartalarm/#",
+    "esp32/#",
 ]
 
 # Store latest values
 gateway_data = {
     "temperature": None,
     "humidity": None,
-    "pressure": None,
     "status": None,
     "last_update": None,
 }
@@ -47,6 +36,13 @@ remote_data = {
     "uvindex": None,
     "battery": None,
     "status": None,
+    "last_update": None,
+}
+
+audio_data = {
+    "status": None,
+    "stream_status": None,
+    "last_command": None,
     "last_update": None,
 }
 
@@ -79,44 +75,70 @@ def on_message(client, userdata, msg):
     """Callback when a message is received"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     topic = msg.topic
-    payload = msg.payload.decode("utf-8")
+    try:
+        payload = msg.payload.decode("utf-8")
+    except UnicodeDecodeError:
+        payload = f"[Binary data of length {len(msg.payload)}]"
+
 
     # Determine if it's gateway or remote sensor data
     is_gateway = "gateway" in topic
-    is_remote = "sensor" in topic and "gateway" not in topic
+    is_remote = "sensor" in topic
+    is_audio = "audio" in topic or "stream" in topic or "play" in topic or "esp32" in topic
     
-    data_dict = gateway_data if is_gateway else remote_data
-    source = "Gateway" if is_gateway else "Remote"
+    source = "Gateway" if is_gateway else "Remote" if is_remote else "System"
 
-    # Update sensor data based on topic
-    if "temperature" in topic:
-        data_dict["temperature"] = payload
+    # Update data dictionaries based on topic
+    if is_gateway:
+        data_dict = gateway_data
+        if "temperature" in topic:
+            data_dict["temperature"] = payload
+            print(f"🌡️  [{timestamp}] {source} Temperature: {payload}°C")
+        elif "humidity" in topic:
+            data_dict["humidity"] = payload
+            print(f"💧 [{timestamp}] {source} Humidity: {payload}%")
+        elif "status" in topic:
+            data_dict["status"] = payload
+            print(f"📡 [{timestamp}] {source} Status: {payload}")
+        else:
+            print(f"📨 [{timestamp}] {topic}: {payload}")
         data_dict["last_update"] = timestamp
-        print(f"🌡️  [{timestamp}] {source} Temperature: {payload}°C")
 
-    elif "humidity" in topic:
-        data_dict["humidity"] = payload
+    elif is_remote:
+        data_dict = remote_data
+        if "temperature" in topic:
+            data_dict["temperature"] = payload
+            print(f"🌡️  [{timestamp}] {source} Temperature: {payload}°C")
+        elif "humidity" in topic:
+            data_dict["humidity"] = payload
+            print(f"💧 [{timestamp}] {source} Humidity: {payload}%")
+        elif "pressure" in topic:
+            data_dict["pressure"] = payload
+            print(f"🌍 [{timestamp}] {source} Pressure: {payload} hPa")
+        elif "uvindex" in topic:
+            data_dict["uvindex"] = payload
+            print(f"☀️  [{timestamp}] {source} UV Index: {payload}")
+        elif "battery" in topic:
+            data_dict["battery"] = payload
+            print(f"🔋 [{timestamp}] {source} Battery: {payload}%")
+        elif "status" in topic:
+            data_dict["status"] = payload
+            print(f"📡 [{timestamp}] {source} Status: {payload}")
+        else:
+            print(f"📨 [{timestamp}] {topic}: {payload}")
         data_dict["last_update"] = timestamp
-        print(f"💧 [{timestamp}] {source} Humidity: {payload}%")
 
-    elif "pressure" in topic:
-        data_dict["pressure"] = payload
-        data_dict["last_update"] = timestamp
-        print(f"🌍 [{timestamp}] {source} Pressure: {payload} hPa")
-    
-    elif "uvindex" in topic:
-        remote_data["uvindex"] = payload
-        remote_data["last_update"] = timestamp
-        print(f"☀️  [{timestamp}] Remote UV Index: {payload}")
-    
-    elif "battery" in topic:
-        remote_data["battery"] = payload
-        remote_data["last_update"] = timestamp
-        print(f"🔋 [{timestamp}] Remote Battery: {payload}%")
-
-    elif "status" in topic:
-        data_dict["status"] = payload
-        print(f"📡 [{timestamp}] {source} Status: {payload}")
+    elif is_audio:
+        audio_data["last_update"] = timestamp
+        if "status" in topic:
+            audio_data["status"] = payload
+            print(f"🎵 [{timestamp}] Audio Status: {payload}")
+        elif "stream" in topic:
+            audio_data["stream_status"] = payload
+            print(f"🎤 [{timestamp}] Stream Status: {payload}")
+        else:
+            audio_data["last_command"] = f"{topic}: {payload}"
+            print(f"🎧 [{timestamp}] {topic}: {payload}")
 
     else:
         print(f"📨 [{timestamp}] {topic}: {payload}")
@@ -128,12 +150,11 @@ def on_message(client, userdata, msg):
 def print_summary():
     """Print a summary of all current sensor values"""
     print("─" * 70)
-    print("Current Sensor Values:")
+    print("Current System State:")
     print()
     print("  📍 Gateway (Local Sensors):")
     print(f"    Temperature: {gateway_data['temperature'] or 'N/A'}°C")
     print(f"    Humidity:    {gateway_data['humidity'] or 'N/A'}%")
-    print(f"    Pressure:    {gateway_data['pressure'] or 'N/A'} hPa")
     print(f"    Status:      {gateway_data['status'] or 'N/A'}")
     if gateway_data["last_update"]:
         print(f"    Last Update: {gateway_data['last_update']}")
@@ -148,6 +169,14 @@ def print_summary():
     print(f"    Status:      {remote_data['status'] or 'N/A'}")
     if remote_data["last_update"]:
         print(f"    Last Update: {remote_data['last_update']}")
+
+    print()
+    print("  🔊 Audio System:")
+    print(f"    Audio Status:  {audio_data['status'] or 'N/A'}")
+    print(f"    Stream Status: {audio_data['stream_status'] or 'N/A'}")
+    print(f"    Last Command:  {audio_data['last_command'] or 'N/A'}")
+    if audio_data["last_update"]:
+        print(f"    Last Update:   {audio_data['last_update']}")
     print("─" * 70)
     print()
 

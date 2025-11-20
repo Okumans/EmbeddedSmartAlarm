@@ -11,6 +11,7 @@
 #include "AudioGeneratorMP3.h"
 #include "AudioGeneratorWAV.h"
 #include "AudioOutputI2S.h"
+#include "sd_manager.h"
 
 // Forward declarations
 class PubSubClient;
@@ -39,6 +40,10 @@ class AudioManager {
   float currentVolume;
 
   MQTTManager* mqttManager;  // For status reporting
+  SDManager* sdManager;      // For file operations
+
+  // NEW: Mutex for thread safety
+  SemaphoreHandle_t audioMutex;
 
   void cleanup();
 
@@ -81,6 +86,7 @@ class AudioManager {
 
   // List all audio files in SD card
   void listFiles();
+  String getFileList();
 
   // Get SD card info
   void printSDInfo();
@@ -90,6 +96,9 @@ class AudioManager {
 
   // Set MQTT manager for status reporting
   void setMQTTManager(MQTTManager* mqtt);
+
+  // Set SD manager for file operations
+  void setSDManager(SDManager* sd);
 
   // Check if audio file is currently downloading
   bool isDownloading();

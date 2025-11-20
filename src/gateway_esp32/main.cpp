@@ -13,6 +13,7 @@
 
 #include "../../include/mqtt_manager.h"
 #include "../../include/rtos_tasks.h"
+#include "../../include/sd_manager.h"
 #include "../../include/sensor_data.h"
 #include "../../include/sensor_manager.h"
 #include "audio_manager.h"
@@ -71,6 +72,7 @@ WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 MQTTManager mqtt;
 AudioManager audio;
+SDManager sdManager;
 
 // ============================================================================
 // Global Variables
@@ -287,8 +289,13 @@ void setupMQTTHandlers() {
           mqtt.publish("smartalarm/status", "audio_stopped");
           return true;
         } else if (message == "list_files") {
-          audio.listFiles();
-          mqtt.publish("smartalarm/status", "files_listed");
+          String fileList = audio.getFileList();
+          if (fileList.length() > 0) {
+            mqtt.publish("smartalarm/files", fileList);
+            mqtt.publish("smartalarm/status", "files_listed");
+          } else {
+            mqtt.publish("smartalarm/status", "no_files");
+          }
           return true;
         } else if (message.startsWith("volume=")) {
           float vol = message.substring(7).toFloat();
@@ -476,8 +483,14 @@ void setup() {
   localSensors.begin(&tca);
   initDisplay();
 
+  // Initialize SD card first
+  if (!sdManager.begin(5)) {
+    Serial.println("[System] SD Manager initialization failed!");
+  }
+
   // Initialize audio system
   audio.begin();
+  audio.setSDManager(&sdManager);
   audio.setMQTTManager(&mqtt);
 
   // Setup WiFi and MQTT

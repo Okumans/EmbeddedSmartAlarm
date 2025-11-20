@@ -6,6 +6,7 @@
 #include <WiFi.h>
 
 #include "../../include/mqtt_manager.h"
+#include "../../include/sd_manager.h"
 
 // ---------------- MQTT TOPICS ----------------
 #include "../../include/config.h"
@@ -31,10 +32,18 @@ AudioManager::AudioManager()
       initialized{false},
       isPlaying{false},
       currentVolume{0.5},
-      mqttManager{nullptr} {}
+      mqttManager{nullptr},
+      sdManager{nullptr} {
+  // Create Recursive Mutex
+  audioMutex = xSemaphoreCreateRecursiveMutex();
+}
 
-AudioManager::~AudioManager() { cleanup(); }
+AudioManager::~AudioManager() {
+  cleanup();
+  vSemaphoreDelete(audioMutex);
+}
 
+// cleanup() is private helper, assumes caller holds lock!
 void AudioManager::cleanup() {
   if (mp3) {
     if (mp3->isRunning()) mp3->stop();
@@ -60,29 +69,6 @@ bool AudioManager::begin() {
     return true;
   }
 
-  Serial.println("[Audio] Initializing SD card...");
-  Serial.println(
-      "[Audio] Mounting SD card (CS=5, MOSI=23, MISO=19, CLK=18)...");
-
-  SPI.begin(SD_CLK, SD_MISO, SD_MOSI, SD_CS);
-
-  int attempts = 0;
-  const int maxAttempts = 10;  // Maximum 10 attempts
-  while (!SD.begin(SD_CS, SPI, 1000000) && attempts < maxAttempts) {
-    attempts++;
-    Serial.printf("[Audio] SD card mount failed! Attempt %d/%d\n", attempts,
-                  maxAttempts);
-    delay(1000);  // Wait 1 second before retrying
-  }
-
-  if (attempts >= maxAttempts) {
-    Serial.println("[Audio] SD card mount failed after maximum attempts!");
-    return false;
-  }
-
-  Serial.println("[Audio] SD card mounted successfully");
-  printSDInfo();
-
   // Initialize I2S output
   Serial.println("[Audio] Initializing I2S output...");
   out = new AudioOutputI2S();
@@ -91,8 +77,6 @@ bool AudioManager::begin() {
 
   initialized = true;
   Serial.println("[Audio] Audio system initialized");
-
-  listFiles();
 
   return true;
 }
@@ -105,14 +89,25 @@ void AudioManager::end() {
     out = nullptr;
   }
 
-  SD.end();
+  // Note: SD.end() is now handled by SDManager
   initialized = false;
   Serial.println("[Audio] Audio system stopped");
 }
 
 bool AudioManager::playFile(const char* filename) {
+  // LOCK
+  xSemaphoreTakeRecursive(audioMutex, portMAX_DELAY);
+
   if (!initialized) {
     Serial.println("[Audio] Not initialized!");
+    xSemaphoreGiveRecursive(audioMutex);  // UNLOCK
+    return false;
+  }
+
+  // Check if SD manager is ready
+  if (!sdManager || !sdManager->isReady()) {
+    Serial.println("[Audio] SD manager not ready!");
+    xSemaphoreGiveRecursive(audioMutex);  // UNLOCK
     return false;
   }
 
@@ -120,8 +115,9 @@ bool AudioManager::playFile(const char* filename) {
   stop();
 
   // Check if file exists
-  if (!SD.exists(filename)) {
+  if (!sdManager->exists(filename)) {
     Serial.printf("[Audio] File not found: %s\n", filename);
+    xSemaphoreGiveRecursive(audioMutex);  // UNLOCK
     return false;
   }
 
@@ -130,20 +126,20 @@ bool AudioManager::playFile(const char* filename) {
   fname.toLowerCase();
 
   if (fname.endsWith(".mp3")) {
-    return playMP3(filename);
+    bool result = playMP3(filename);
+    xSemaphoreGiveRecursive(audioMutex);  // UNLOCK
+    return result;
   } else {
     Serial.println("[Audio] Unsupported file format. Use .mp3");
+    xSemaphoreGiveRecursive(audioMutex);  // UNLOCK
     return false;
   }
 }
 
 bool AudioManager::playMP3(const char* filename) {
-  if (!initialized) {
-    Serial.println("[Audio] Not initialized!");
-    return false;
-  }
+  xSemaphoreTakeRecursive(audioMutex, portMAX_DELAY);  // LOCK
 
-  cleanup();
+  cleanup();  // Safe to call now
 
   Serial.printf("[Audio] Playing MP3: %s\n", filename);
 
@@ -158,36 +154,44 @@ bool AudioManager::playMP3(const char* filename) {
       mqttManager->publish(TOPIC_STATUS, "playing");
       Serial.println("[Audio] Published 'playing' status");
     }
+    xSemaphoreGiveRecursive(audioMutex);  // UNLOCK
     return true;
   } else {
     Serial.println("[Audio] Failed to start MP3 playback");
     cleanup();
+    xSemaphoreGiveRecursive(audioMutex);  // UNLOCK
     return false;
   }
 }
 
 void AudioManager::stop() {
+  xSemaphoreTakeRecursive(audioMutex, portMAX_DELAY);  // LOCK
   cleanup();
   Serial.println("[Audio] Stopped");
+  xSemaphoreGiveRecursive(audioMutex);  // UNLOCK
 }
 
+// CRITICAL: This runs on Core 1
 void AudioManager::loop() {
-  if (!initialized || !isPlaying) {
-    return;
-  }
+  // We grab the lock. If Core 0 is busy setting up a song (playFile),
+  // we wait here instead of crashing on a bad pointer.
+  if (xSemaphoreTakeRecursive(audioMutex, 5) == pdTRUE) {  // Wait max 5 ticks
 
-  if (mp3 && mp3->isRunning()) {
-    if (!mp3->loop()) {
-      Serial.println("[Audio] MP3 playback finished");
-      cleanup();
-      // Publish finished status
-      if (mqttManager) {
-        mqttManager->publish(TOPIC_STATUS, "finished");
-        Serial.println("[Audio] Published 'finished' status");
+    if (initialized && isPlaying && mp3 && mp3->isRunning()) {
+      if (!mp3->loop()) {
+        Serial.println("[Audio] MP3 playback finished");
+        cleanup();  // Safe
+        // Publish finished status
+        if (mqttManager) {
+          mqttManager->publish(TOPIC_STATUS, "finished");
+          Serial.println("[Audio] Published 'finished' status");
+        }
       }
+    } else {
+      isPlaying = false;
     }
-  } else {
-    isPlaying = false;
+
+    xSemaphoreGiveRecursive(audioMutex);  // UNLOCK
   }
 }
 
@@ -202,42 +206,37 @@ void AudioManager::setVolume(float volume) {
 float AudioManager::getVolume() { return currentVolume; }
 
 bool AudioManager::playing() {
+  xSemaphoreTakeRecursive(audioMutex, portMAX_DELAY);  // LOCK
+
   if (!initialized || !isPlaying) {
+    xSemaphoreGiveRecursive(audioMutex);  // UNLOCK
     return false;
   }
 
   if (mp3 && mp3->isRunning()) {
+    xSemaphoreGiveRecursive(audioMutex);  // UNLOCK
     return true;
   }
 
   isPlaying = false;
+  xSemaphoreGiveRecursive(audioMutex);  // UNLOCK
   return false;
 }
 
 void AudioManager::listFiles() {
-  Serial.println("[Audio] Files in SD card:");
-  Serial.println("----------------------------------------");
-
-  File root = SD.open("/");
-  File file = root.openNextFile();
-  int count = 0;
-  while (file) {
-    if (!file.isDirectory()) {
-      String filename = file.name();
-      if (filename.endsWith(".mp3") || filename.endsWith(".MP3")) {
-        Serial.printf("  %s (%d bytes)\n", file.name(), file.size());
-        count++;
-      }
-    }
-    file = root.openNextFile();
-  }
-
-  if (count == 0) {
-    Serial.println("  No audio files found");
+  if (sdManager && sdManager->isReady()) {
+    sdManager->listAudioFiles();
   } else {
-    Serial.printf("Total: %d audio file(s)\n", count);
+    Serial.println("[Audio] SD manager not ready");
   }
-  Serial.println("----------------------------------------");
+}
+
+String AudioManager::getFileList() {
+  if (sdManager && sdManager->isReady()) {
+    return sdManager->listAudioFiles();
+  } else {
+    return "";
+  }
 }
 
 void AudioManager::printSDInfo() {
@@ -303,12 +302,8 @@ bool AudioManager::handleAudioRequest(MQTTManager& mqtt, byte* payload,
 
     // Check if current audio file exists and get its size
     size_t currentAudioSize = 0;
-    if (SD.exists(recvFilename)) {
-      File f = SD.open(recvFilename, "r");
-      if (f) {
-        currentAudioSize = f.size();
-        f.close();
-      }
+    if (sdManager->exists(recvFilename.c_str())) {
+      currentAudioSize = sdManager->getFileSize(recvFilename.c_str());
     }
 
     // Send response: FREE:<freeSpace>:<currentAudioSize>
@@ -327,39 +322,37 @@ bool AudioManager::handleAudioRequest(MQTTManager& mqtt, byte* payload,
 
 bool AudioManager::handleAudioChunk(MQTTManager& mqtt, byte* payload,
                                     unsigned int length) {
-  static size_t bytesSinceFlush = 0;  // Track bytes written since last flush
+  if (!sdManager || !sdManager->isReady()) return true;
 
-  // --- DEBUG: Print Header Preview ---
-  char debugHead[10];
-  int copyLen = length < 9 ? length : 9;
-  memcpy(debugHead, payload, copyLen);
-  debugHead[copyLen] = '\0';
-  // Print hex values of first 6 bytes to check for hidden chars/corruption
-  Serial.printf(
-      "[Audio] RX Payload Preview: '%s' (Hex: %02X %02X %02X %02X %02X %02X)\n",
-      debugHead, payload[0], payload[1], payload[2], payload[3], payload[4],
-      payload[5]);
-
-  // ---------- START: expected size ----------
+  // ---------- START: expected size:uuid ----------
   const char startPrefix[] = "START:";
   if (length > 6 && memcmp(payload, startPrefix, 6) == 0) {
     String num = String((char*)(payload + 6), length - 6);
-    expectedSize = num.toInt();
+    // Parse UUID from payload (START:<size>:<uuid>)
+    int colonPos = num.indexOf(':');
+    if (colonPos != -1) {
+      expectedSize = num.substring(0, colonPos).toInt();
+      String audioId = num.substring(colonPos + 1);
+      // Create filename with UUID: /sound_<uuid>.mp3
+      recvFilename = "/sound_" + audioId + ".mp3";
+    } else {
+      expectedSize = num.toInt();
+      recvFilename = "/uploaded.mp3";  // fallback
+    }
     receivedSize = 0;
 
-    Serial.printf("[Audio] START Expecting file size: %u bytes\n",
-                  expectedSize);
+    Serial.printf("[Audio] START Expecting file size: %u bytes, UUID: %s\n",
+                  expectedSize, recvFilename.c_str());
 
-    // Delete old file
-    if (SD.exists(recvFilename)) {
-      SD.remove(recvFilename);
+    // Delete old file if exists
+    if (sdManager->exists(recvFilename.c_str())) {
+      sdManager->remove(recvFilename.c_str());
       Serial.println("[Audio] Old file removed.");
     }
 
-    fsFile = SD.open(recvFilename, "w");
-    if (!fsFile) {
+    // Open file for writing
+    if (!sdManager->openForWrite(recvFilename.c_str())) {
       Serial.println("[Audio] ERROR: Could not open file for writing.");
-      // For SD, we can't easily get free space, so just report error
       Serial.println("[Audio] SD card may be full or not available");
       receivingFile = false;
       return true;
@@ -367,8 +360,6 @@ bool AudioManager::handleAudioChunk(MQTTManager& mqtt, byte* payload,
 
     Serial.printf("[Audio] File opened: %s\n", recvFilename.c_str());
     Serial.printf("[Audio] Ready to receive %u bytes\n", expectedSize);
-
-    bytesSinceFlush = 0;  // RESET FLUSH COUNTER HERE
 
     receivingFile = true;
     lastChunkTime = millis();
@@ -408,23 +399,17 @@ bool AudioManager::handleAudioChunk(MQTTManager& mqtt, byte* payload,
     int rawLen = (int)length - headerLen;
 
     if (rawLen > 0) {
-      size_t bytesWritten = fsFile.write(payload + headerLen, rawLen);
-      if (bytesWritten != (size_t)rawLen) {
-        Serial.printf("[Audio] WARNING: Wrote %u bytes but expected %d!\n",
-                      bytesWritten, rawLen);
+      // DELEGATE: Write raw bytes to SDManager
+      bool success = sdManager->writeChunk(payload + headerLen, rawLen);
+
+      if (!success) {
+        Serial.println("[Audio] Write failed! Aborting.");
+        sdManager->closeFile();
+        receivingFile = false;
+        return true;
       }
+
       receivedSize += rawLen;
-
-      // --- NEW FLUSH LOGIC ---
-      bytesSinceFlush += rawLen;
-      if (bytesSinceFlush >= 32768) {  // Flush every 32KB
-        fsFile.flush();
-        bytesSinceFlush = 0;
-        // Optional debug print (comment out if too noisy)
-        // Serial.println("[Audio] Intermediate Flush (32KB saved)");
-      }
-      // -----------------------
-
       float progress = (receivedSize * 100.0) / expectedSize;
       Serial.printf("[Audio] Chunk %d: %d bytes | Total: %u/%u (%.1f%%)\n",
                     chunkIndex, rawLen, receivedSize, expectedSize, progress);
@@ -449,16 +434,8 @@ bool AudioManager::handleAudioChunk(MQTTManager& mqtt, byte* payload,
   const char endMsg[] = "END";
   if (length == 3 && memcmp(payload, endMsg, 3) == 0) {
     if (receivingFile) {
-      // --- FIX: Ensure physical write and cool-down ---
-      Serial.println("[Audio] Finalizing write to SD card...");
-      fsFile.flush();  // Force data to physical card
-      fsFile.close();  // Close file handle
-
-      // CRITICAL: Give SD card time to update FAT table
-      // 'Select Failed' happens if we access it while it's busy internally.
-      delay(500);
-      // ------------------------------------------------
-
+      // DELEGATE: Safe close and cool-down
+      sdManager->closeFile();
       receivingFile = false;
 
       Serial.println("[Audio] ============================================");
@@ -490,6 +467,8 @@ bool AudioManager::playFileFromSD(const char* filename) {
 }
 
 void AudioManager::setMQTTManager(MQTTManager* mqtt) { mqttManager = mqtt; }
+
+void AudioManager::setSDManager(SDManager* sd) { sdManager = sd; }
 
 bool AudioManager::isDownloading() {
   extern bool

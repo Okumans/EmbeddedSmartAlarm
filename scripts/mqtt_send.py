@@ -4,11 +4,44 @@ Quick MQTT Audio Test
 Send quick commands to test audio playback
 """
 
+import paho.mqtt.client as mqtt
 import paho.mqtt.publish as publish
 import sys
+import time
 
 BROKER = "broker.hivemq.com"
 PORT = 1883
+
+# Global variables for file listing
+file_list_received = None
+status_received = None
+
+def on_message(client, userdata, msg):
+    """Handle incoming MQTT messages"""
+    global file_list_received, status_received
+    
+    payload = msg.payload.decode()
+    
+    if msg.topic == "smartalarm/files":
+        file_list_received = payload
+        print(f"\n📁 Files received: {payload}")
+        
+        if payload.strip():
+            files = payload.split(',')
+            print(f"\n🎵 Available audio files ({len(files)}):")
+            for i, filename in enumerate(files, 1):
+                print(f"  {i}. {filename}")
+        else:
+            print("📁 No audio files found on SD card")
+            
+    elif msg.topic == "smartalarm/status":
+        status_received = payload
+        if payload == "files_listed":
+            print("✓ File list request acknowledged")
+        elif payload == "no_files":
+            print("📁 No audio files available")
+        else:
+            print(f"Status: {payload}")
 
 def send(topic, message):
     """Send a single MQTT message"""
@@ -17,6 +50,45 @@ def send(topic, message):
         print(f"✓ Sent: [{topic}] {message}")
     except Exception as e:
         print(f"✗ Error: {e}")
+
+def list_files():
+    """Send list command and wait for response"""
+    global file_list_received, status_received
+    
+    # Reset globals
+    file_list_received = None
+    status_received = None
+    
+    # Create MQTT client for receiving
+    client = mqtt.Client()
+    client.on_message = on_message
+    
+    try:
+        client.connect(BROKER, PORT, 60)
+        client.subscribe("smartalarm/files")
+        client.subscribe("smartalarm/status")
+        client.loop_start()
+        
+        # Send the list command
+        send("smartalarm/commands", "list_files")
+        
+        # Wait for response
+        timeout = 5.0
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            if file_list_received is not None or (status_received and status_received == "no_files"):
+                break
+            time.sleep(0.1)
+        
+        client.loop_stop()
+        client.disconnect()
+        
+        if file_list_received is None and status_received != "no_files":
+            print("⏰ Timeout waiting for file list response")
+            
+    except Exception as e:
+        print(f"✗ Error connecting to MQTT: {e}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -47,7 +119,7 @@ if __name__ == "__main__":
         send("smartalarm/commands", f"volume={vol}")
         
     elif cmd == "list":
-        send("smartalarm/commands", "list_files")
+        list_files()
         print("Check Serial Monitor for output")
         
     else:

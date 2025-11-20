@@ -5,6 +5,7 @@ import time
 import math
 import argparse
 import sys
+import uuid
 
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
@@ -13,8 +14,9 @@ TOPIC_REQUEST = "esp32/audio_request"
 TOPIC_RESPONSE = "esp32/audio_response"
 TOPIC_CHUNK = "esp32/audio_chunk"
 TOPIC_ACK = "esp32/audio_ack"
+TOPIC_PLAY = "smartalarm/play_audio"
 
-CHUNK_SIZE = 3072
+CHUNK_SIZE = 1024
 free_space_reply = None
 current_audio_size = None
 last_ack = None
@@ -99,7 +101,7 @@ def compress_mp3(input_file, output_file, bitrate="32k"):
 # -------------------------------------------------------------
 # SEND CHUNKS
 # -------------------------------------------------------------
-def send_in_chunks(client, file_path):
+def send_in_chunks(client, file_path, audio_id):
     global last_ack
     with open(file_path, "rb") as f:
         data = f.read()
@@ -107,10 +109,10 @@ def send_in_chunks(client, file_path):
     file_size = len(data)
     total_chunks = math.ceil(file_size / CHUNK_SIZE)
 
-    # Tell ESP32 file size
-    client.publish(TOPIC_CHUNK, f"START:{file_size}")
+    # Tell ESP32 file size and ID
+    client.publish(TOPIC_CHUNK, f"START:{file_size}:{audio_id}")
 
-    print(f"[+] Sending {total_chunks} chunks...")
+    print(f"[+] Sending {total_chunks} chunks for audio ID {audio_id}...")
 
     # Send each chunk and wait for ACK before sending next
     for i in range(total_chunks):
@@ -125,7 +127,7 @@ def send_in_chunks(client, file_path):
         last_ack = None
         print(f"  - Sent chunk {i+1}/{total_chunks}, waiting for ACK...")
         wait_start = time.time()
-        ack_timeout = 10.0  # seconds
+        ack_timeout = 50.0  # seconds
         acknowledged = False
         while time.time() - wait_start < ack_timeout:
             if last_ack is not None and last_ack == i:
@@ -153,14 +155,14 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Upload with default compression (32k bitrate)
+  # Upload with default compression (32k bitrate) and random UUID4 ID
   python mqtt_audiochunkupload.py input.mp3
   
-  # Upload with custom compression
-  python mqtt_audiochunkupload.py input.mp3 --bitrate 64k
+  # Upload with custom compression and specific ID
+  python mqtt_audiochunkupload.py input.mp3 --bitrate 64k --id 202
   
-  # Upload without compression (use original file)
-  python mqtt_audiochunkupload.py input.mp3 --bitrate 0
+  # Upload without compression (use original file) and custom ID
+  python mqtt_audiochunkupload.py input.mp3 --bitrate 0 --id my_audio_123
         """
     )
     
@@ -175,6 +177,11 @@ Examples:
         default="compressed.mp3",
         help="Output file name for compressed file (default: compressed.mp3)"
     )
+    parser.add_argument(
+        "--id",
+        default=str(uuid.uuid4()),
+        help="Audio ID for the uploaded file (default: random UUID4)"
+    )
     
     args = parser.parse_args()
     
@@ -186,8 +193,10 @@ Examples:
     INPUT = args.input_file
     OUTPUT = args.output
     BITRATE = args.bitrate if args.bitrate != "0" else None
+    AUDIO_ID = args.id
     
     print(f"[INFO] Input file: {INPUT}")
+    print(f"[INFO] Audio ID: {AUDIO_ID}")
     print(f"[INFO] Original size: {os.path.getsize(INPUT)} bytes")
     
     # Compress MP3 (or skip if bitrate is 0)
@@ -227,9 +236,17 @@ Examples:
         print(f"[INFO] Note: Current audio ({current_audio} bytes) will be replaced")
 
     print("[✓] Enough space. Uploading file...")
-    send_in_chunks(client, file_to_upload)
+    send_in_chunks(client, file_to_upload, AUDIO_ID)
+
+    # Send PLAY command after upload
+    filename = f"/sound_{AUDIO_ID}.mp3"
+    print(f"[+] Sending PLAY command for {filename}...")
+    client.publish(TOPIC_PLAY, filename)
+    
+    # Wait a moment for the play command to be processed
+    time.sleep(1)
 
     client.loop_stop()
     client.disconnect()
     
-    print("\n[✓] Upload complete!")
+    print("\n[✓] Upload and play command complete!")

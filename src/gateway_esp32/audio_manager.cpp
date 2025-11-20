@@ -18,11 +18,6 @@
 #define TOPIC_STATUS MQTT_TOPIC_AUDIO_STATUS
 
 File fsFile;
-String recvFilename = "/question.mp3";
-bool receivingFile = false;
-size_t expectedSize = 0;
-size_t receivedSize = 0;
-unsigned long lastChunkTime = 0;  // Track upload timeout
 
 AudioManager::AudioManager()
     : out{nullptr},
@@ -33,7 +28,11 @@ AudioManager::AudioManager()
       isPlaying{false},
       currentVolume{0.5},
       mqttManager{nullptr},
-      sdManager{nullptr} {
+      sdManager{nullptr},
+      receivingFile{false},
+      expectedSize{0},
+      receivedSize{0},
+      lastChunkTime{0} {
   // Create Recursive Mutex
   audioMutex = xSemaphoreCreateRecursiveMutex();
 }
@@ -470,8 +469,9 @@ void AudioManager::setMQTTManager(MQTTManager* mqtt) { mqttManager = mqtt; }
 
 void AudioManager::setSDManager(SDManager* sd) { sdManager = sd; }
 
-bool AudioManager::isDownloading() {
-  extern bool
-      receivingFile;  // Access the global variable defined at top of file
-  return receivingFile;
+bool AudioManager::isDownloading() { return receivingFile; }
+
+float AudioManager::getDownloadProgress() const {
+  if (!receivingFile || expectedSize == 0) return -1.0f;
+  return (float)receivedSize / expectedSize;
 }

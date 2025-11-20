@@ -114,8 +114,22 @@ bool MQTTManager::topicMatches(const String& pattern, const String& topic) {
 
 void MQTTManager::dispatch(const char* topic, byte* payload,
                            unsigned int length) {
-  Serial.printf("[MQTTManager] Dispatching message on topic: %s (%u bytes)\n",
-                topic, length);
+  // Serial.printf... (Optional: Comment out to save CPU during high speed
+  // transfer)
+
+  // --- FAST PATH OPTIMIZATION START ---
+  // Check for high-frequency audio topic using raw C-string comparison.
+  // This avoids creating new String objects, preventing Heap
+  // Fragmentation/Crash.
+  if (strcmp(topic, "esp32/audio_chunk") == 0) {
+    for (auto& handler : handlers) {
+      if (handler.topicPattern.equals("esp32/audio_chunk")) {
+        handler.callback(*this, topic, payload, length);
+        return;  // Done! No Strings created.
+      }
+    }
+  }
+  // --- FAST PATH OPTIMIZATION END ---
 
   String topicStr = String(topic);
   bool handled = false;
@@ -123,16 +137,14 @@ void MQTTManager::dispatch(const char* topic, byte* payload,
   // Try each handler in priority order
   for (auto& handler : handlers) {
     if (topicMatches(handler.topicPattern, topicStr)) {
-      Serial.printf(
-          "[MQTTManager] → Trying handler '%s' (pattern: '%s', priority: %d)\n",
-          handler.name.c_str(), handler.topicPattern.c_str(), handler.priority);
+      // Debug only for non-audio topics to keep logs clean
+      if (length < 100) {
+        Serial.printf("[MQTTManager] → Match: '%s'\n", handler.name.c_str());
+      }
 
-      // Pass *this (MQTTManager reference) to the handler
       if (handler.callback(*this, topic, payload, length)) {
-        Serial.printf("[MQTTManager] ✓ Handled by '%s'\n",
-                      handler.name.c_str());
         handled = true;
-        break;  // Stop at first handler that returns true
+        break;
       }
     }
   }

@@ -11,6 +11,7 @@
 #include <soc/rtc_cntl_reg.h>
 #include <soc/soc.h>
 
+#include "../../include/display_manager.h"
 #include "../../include/mqtt_manager.h"
 #include "../../include/rtos_tasks.h"
 #include "../../include/sd_manager.h"
@@ -67,18 +68,16 @@ const char* MQTT_TOPIC_REMOTE_STATUS = "smartalarm/sensor/status";
 
 SensorManager localSensors(DHTPIN, DHTTYPE);
 TCA9548A tca;
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 MQTTManager mqtt;
 AudioManager audio;
 SDManager sdManager;
+DisplayManager displayManager;
 
 // ============================================================================
 // Global Variables
 // ============================================================================
-
-int animationX = 0;  // Display animation variable
 
 // Remote sensor data (from NodeMCU via ESP-NOW)
 SensorData remoteSensorData;
@@ -95,7 +94,6 @@ void setupMQTTHandlers();
 void setupESPNow();
 void onESPNowDataReceived(const uint8_t* mac_addr, const uint8_t* data,
                           int data_len);
-void initDisplay();
 void publishRemoteSensorData();
 void updateDisplay();
 
@@ -240,6 +238,7 @@ void setupESPNow() {
 // ============================================================================
 
 void setupMQTT() {
+  wifiClient.setTimeout(3000);  // 3 second timeout for MQTT connections
   mqttClient.setBufferSize(4200);
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
 
@@ -368,94 +367,6 @@ void publishRemoteSensorData() {
 }
 
 // ============================================================================
-// Display Initialization
-// ============================================================================
-
-void initDisplay() {
-  Serial.println("[Display] Initializing OLED...");
-
-  tca.openChannel(TCA_CHANNEL_OLED);
-
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
-    Serial.println("[Display] SSD1306 not found!");
-    tca.closeChannel(TCA_CHANNEL_OLED);
-    while (1);
-  }
-
-  // Show startup screen
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("Smart Alarm Clock");
-  display.println("================");
-  display.println();
-  display.println("Initializing...");
-  display.display();
-
-  tca.closeChannel(TCA_CHANNEL_OLED);
-  Serial.println("[Display] OLED initialized");
-}
-
-// ============================================================================
-// Display Update
-// ============================================================================
-
-void updateDisplay() {
-  tca.openChannel(TCA_CHANNEL_OLED);
-
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-
-  // Title
-  display.println("Smart Alarm Gateway");
-  display.println("------------------");
-
-  // Local sensor data (left side)
-  display.printf("L:%.0fC %.0f%%", localSensors.getTemperature(),
-                 localSensors.getHumidity());
-
-  // Remote sensor data indicator (right side)
-  if (remoteSensorDataAvailable &&
-      (millis() - lastRemoteDataReceived < 30000)) {
-    display.printf(" R:OK\n");
-    display.printf("R:%.0fC %.0f%% UV:%.1f\n", remoteSensorData.temperature,
-                   remoteSensorData.humidity, remoteSensorData.uvIndex);
-    display.printf("Batt:%d%%\n", remoteSensorData.batteryLevel);
-  } else {
-    display.println(" R:--");
-    display.println("Remote: No Data");
-  }
-
-  // WiFi and MQTT status
-  display.println();
-  if (WiFi.status() == WL_CONNECTED) {
-    display.print("WiFi:OK");
-  } else {
-    display.print("WiFi:--");
-  }
-
-  display.print(" MQTT:");
-  if (mqttClient.connected()) {
-    display.println("OK");
-  } else {
-    display.println("--");
-  }
-
-  display.print("ESPNow:OK");
-
-  // Animation
-  display.fillRect(animationX, 56, 10, 8, SSD1306_WHITE);
-  animationX += 4;
-  if (animationX > SCREEN_WIDTH) animationX = 0;
-
-  display.display();
-  tca.closeChannel(TCA_CHANNEL_OLED);
-}
-
-// ============================================================================
 // Arduino Setup
 // ============================================================================
 
@@ -481,7 +392,8 @@ void setup() {
 
   // Initialize components
   localSensors.begin(&tca);
-  initDisplay();
+  displayManager.begin(&tca);
+  displayManager.showStartup();
 
   // Initialize SD card first
   if (!sdManager.begin(5)) {
@@ -493,15 +405,18 @@ void setup() {
   audio.setSDManager(&sdManager);
   audio.setMQTTManager(&mqtt);
 
+  // Set display manager dependencies
+  displayManager.setSensorManager(&localSensors);
+  displayManager.setSDManager(&sdManager);
+  displayManager.setAudioManager(&audio);
+  displayManager.setRemoteSensorData(&remoteSensorData);
+
   // Setup WiFi and MQTT
   setupWiFi();
   setupMQTT();
 
   // Setup ESP-NOW (after WiFi for channel sync)
   setupESPNow();
-
-  // Initial display update
-  updateDisplay();
 
   Serial.println("\n[System] Setup complete!\n");
   Serial.println("========================================");

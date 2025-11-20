@@ -11,11 +11,11 @@
 #include "AudioGeneratorMP3.h"
 #include "AudioGeneratorWAV.h"
 #include "AudioOutputI2S.h"
+#include "mqtt_manager.h"
 #include "sd_manager.h"
 
 // Forward declarations
 class PubSubClient;
-class MQTTManager;
 
 // I2S Configuration
 #define I2S_BCLK 26
@@ -44,6 +44,13 @@ class AudioManager {
 
   // NEW: Mutex for thread safety
   SemaphoreHandle_t audioMutex;
+
+  // Download state
+  bool receivingFile;
+  size_t expectedSize;
+  size_t receivedSize;
+  unsigned long lastChunkTime;
+  String recvFilename;
 
   void cleanup();
 
@@ -102,6 +109,9 @@ class AudioManager {
 
   // Check if audio file is currently downloading
   bool isDownloading();
+
+  // Get download progress (0.0 to 1.0, or -1 if not downloading)
+  float getDownloadProgress() const;
 };
 
 #endif  // AUDIO_MANAGER_H

@@ -1,5 +1,6 @@
 #include "../../include/rtos_tasks.h"
 
+#include "../../include/display_manager.h"
 #include "../../include/mqtt_manager.h"
 #include "../../include/sensor_manager.h"
 #include "audio_manager.h"
@@ -8,7 +9,7 @@
 extern AudioManager audio;
 extern MQTTManager mqtt;
 extern SensorManager localSensors;
-extern void updateDisplay();
+extern DisplayManager displayManager;
 extern void publishRemoteSensorData();
 
 // Task handles
@@ -57,8 +58,8 @@ void mqttTask(void* parameter) {
     // Process MQTT messages
     mqtt.loop();
 
-    // Run at 50Hz (every 20ms) - reduced from 5ms to save power
-    vTaskDelay(pdMS_TO_TICKS(20));
+    // Run at 10Hz (every 100ms) - reduced frequency to prevent watchdog
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 
@@ -114,15 +115,22 @@ void sensorTask(void* parameter) {
 void displayTask(void* parameter) {
   Serial.println("[RTOS] Display Task started on Core 1");
 
-  const TickType_t displayInterval = pdMS_TO_TICKS(200);  // 5Hz (every 200ms)
-  TickType_t xLastWakeTime = xTaskGetTickCount();
+  int pageCounter = 0;
+  const int PAGE_SWITCH_INTERVAL = 25;  // 5 seconds (25 * 200ms)
 
   for (;;) {
     // Update display
-    updateDisplay();
+    displayManager.update();
 
-    // Run at 10Hz (every 100ms)
-    vTaskDelayUntil(&xLastWakeTime, displayInterval);
+    // Cycle to next page every 5 seconds
+    pageCounter++;
+    if (pageCounter >= PAGE_SWITCH_INTERVAL) {
+      displayManager.nextPage();
+      pageCounter = 0;
+    }
+
+    // Delay 200ms (5 FPS refresh rate)
+    vTaskDelay(pdMS_TO_TICKS(200));
   }
 }
 

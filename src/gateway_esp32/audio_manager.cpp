@@ -1,10 +1,9 @@
 #include "audio_manager.h"
 
 // MQTT Manager for remote file upload
-#include <LittleFS.h>
+#include <SD.h>
+#include <SPI.h>
 #include <WiFi.h>
-#include <WiFiUdp.h>
-#include <freertos/FreeRTOS.h>
 
 #include "../../include/mqtt_manager.h"
 
@@ -15,9 +14,10 @@
 #define TOPIC_RESPONSE MQTT_TOPIC_AUDIO_RESPONSE
 #define TOPIC_CHUNK MQTT_TOPIC_AUDIO_CHUNK
 #define TOPIC_ACK MQTT_TOPIC_AUDIO_ACK
+#define TOPIC_STATUS MQTT_TOPIC_AUDIO_STATUS
 
 File fsFile;
-String recvFilename = "/sound.mp3";
+String recvFilename = "/question.mp3";
 bool receivingFile = false;
 size_t expectedSize = 0;
 size_t receivedSize = 0;
@@ -28,13 +28,10 @@ AudioManager::AudioManager()
       file{nullptr},
       id3{nullptr},
       mp3{nullptr},
-      initialized{nullptr},
+      initialized{false},
       isPlaying{false},
       currentVolume{0.5},
-      currentMode{MODE_IDLE},
-      streamActive{false} {
-  initADPCM();
-}
+      mqttManager{nullptr} {}
 
 AudioManager::~AudioManager() { cleanup(); }
 
@@ -63,27 +60,28 @@ bool AudioManager::begin() {
     return true;
   }
 
-  Serial.println("[Audio] Initializing filesystem...");
-  Serial.println("[Audio] Mounting LittleFS (will format if needed)...");
+  Serial.println("[Audio] Initializing SD card...");
+  Serial.println(
+      "[Audio] Mounting SD card (CS=5, MOSI=23, MISO=19, CLK=18)...");
 
-  if (!LittleFS.begin()) {
-    Serial.println("[Audio] LittleFS mount failed — attempting format...");
+  SPI.begin(SD_CLK, SD_MISO, SD_MOSI, SD_CS);
 
-    if (!LittleFS.format()) {
-      Serial.println("[Audio] LittleFS format failed!");
-      return false;
-    }
-
-    delay(100);
-
-    if (!LittleFS.begin()) {
-      Serial.println("[Audio] LittleFS mount failed even after format");
-      return false;
-    }
+  int attempts = 0;
+  const int maxAttempts = 10;  // Maximum 10 attempts
+  while (!SD.begin(SD_CS, SPI, 1000000) && attempts < maxAttempts) {
+    attempts++;
+    Serial.printf("[Audio] SD card mount failed! Attempt %d/%d\n", attempts,
+                  maxAttempts);
+    delay(1000);  // Wait 1 second before retrying
   }
 
-  Serial.println("[Audio] LittleFS mounted successfully");
-  printSPIFFSInfo();
+  if (attempts >= maxAttempts) {
+    Serial.println("[Audio] SD card mount failed after maximum attempts!");
+    return false;
+  }
+
+  Serial.println("[Audio] SD card mounted successfully");
+  printSDInfo();
 
   // Initialize I2S output
   Serial.println("[Audio] Initializing I2S output...");
@@ -107,7 +105,7 @@ void AudioManager::end() {
     out = nullptr;
   }
 
-  LittleFS.end();
+  SD.end();
   initialized = false;
   Serial.println("[Audio] Audio system stopped");
 }
@@ -122,7 +120,7 @@ bool AudioManager::playFile(const char* filename) {
   stop();
 
   // Check if file exists
-  if (!LittleFS.exists(filename)) {
+  if (!SD.exists(filename)) {
     Serial.printf("[Audio] File not found: %s\n", filename);
     return false;
   }
@@ -149,12 +147,17 @@ bool AudioManager::playMP3(const char* filename) {
 
   Serial.printf("[Audio] Playing MP3: %s\n", filename);
 
-  file = new AudioFileSourceLittleFS(filename);
+  file = new AudioFileSourceSD(filename);
   id3 = new AudioFileSourceID3(file);
   mp3 = new AudioGeneratorMP3();
 
   if (mp3->begin(id3, out)) {
     isPlaying = true;
+    // Publish playing status
+    if (mqttManager) {
+      mqttManager->publish(TOPIC_STATUS, "playing");
+      Serial.println("[Audio] Published 'playing' status");
+    }
     return true;
   } else {
     Serial.println("[Audio] Failed to start MP3 playback");
@@ -177,6 +180,11 @@ void AudioManager::loop() {
     if (!mp3->loop()) {
       Serial.println("[Audio] MP3 playback finished");
       cleanup();
+      // Publish finished status
+      if (mqttManager) {
+        mqttManager->publish(TOPIC_STATUS, "finished");
+        Serial.println("[Audio] Published 'finished' status");
+      }
     }
   } else {
     isPlaying = false;
@@ -207,10 +215,10 @@ bool AudioManager::playing() {
 }
 
 void AudioManager::listFiles() {
-  Serial.println("[Audio] Files in filesystem:");
+  Serial.println("[Audio] Files in SD card:");
   Serial.println("----------------------------------------");
 
-  File root = LittleFS.open("/");
+  File root = SD.open("/");
   File file = root.openNextFile();
   int count = 0;
   while (file) {
@@ -232,18 +240,10 @@ void AudioManager::listFiles() {
   Serial.println("----------------------------------------");
 }
 
-void AudioManager::printSPIFFSInfo() {
-  size_t totalBytes = LittleFS.totalBytes();
-  size_t usedBytes = LittleFS.usedBytes();
-
-  Serial.println("[Audio] LittleFS Info:");
-  Serial.printf("  Total: %d bytes (%.2f MB)\n", totalBytes,
-                totalBytes / (1024.0 * 1024.0));
-  Serial.printf("  Used:  %d bytes (%.2f MB)\n", usedBytes,
-                usedBytes / (1024.0 * 1024.0));
-  Serial.printf("  Free:  %d bytes (%.2f MB)\n", totalBytes - usedBytes,
-                (totalBytes - usedBytes) / (1024.0 * 1024.0));
-  Serial.printf("  Usage: %.1f%%\n", (usedBytes * 100.0) / totalBytes);
+void AudioManager::printSDInfo() {
+  Serial.println("[Audio] SD Card Info:");
+  Serial.println("  SD card is mounted and ready");
+  // Note: SD library doesn't provide total/used bytes like LittleFS
 }
 
 // Helper: parse numeric substring from payload
@@ -289,154 +289,6 @@ void AudioManager::registerMQTTHandlers(MQTTManager& mqtt) {
 }
 
 // ============================================================================
-// STREAM MODE METHODS
-// ============================================================================
-
-bool AudioManager::beginStreamRX(int port) {
-  if (!initialized) {
-    Serial.println("[Audio] Not initialized!");
-    return false;
-  }
-
-  if (streamActive) {
-    Serial.println("[Audio] Stream already active");
-    return true;
-  }
-
-  Serial.printf("[Audio] Starting UDP listener on port %d\n", port);
-  if (udp.begin(port)) {
-    streamActive = true;
-    currentMode = MODE_STREAM_RX;
-    initADPCM();
-    // Configure I2S for ADPCM streaming: 16kHz, 16-bit, Stereo
-    if (out) {
-      out->stop();          // Stop any previous playback to reset buffers
-      out->SetRate(16000);  // Set Sample Rate for ADPCM
-      out->begin();         // Restart the I2S driver with new settings
-      Serial.println("[Audio] I2S Re-configured: 16kHz for ADPCM streaming");
-    }
-    Serial.println("[Audio] Stream RX mode activated");
-    return true;
-  } else {
-    Serial.println("[Audio] Failed to start UDP listener");
-    return false;
-  }
-}
-
-void AudioManager::stopStream() {
-  if (streamActive) {
-    udp.stop();
-    streamActive = false;
-    currentMode = MODE_IDLE;
-    // Reset I2S to default settings for MP3 playback
-    if (out) {
-      out->stop();          // Stop streaming playback
-      out->SetRate(44100);  // Reset to MP3 sample rate
-      out->begin();         // Restart the I2S driver with MP3 settings
-      Serial.println("[Audio] I2S reset to 44.1kHz for MP3 playback");
-    }
-    Serial.println("[Audio] Stream stopped");
-  }
-}
-
-void AudioManager::processStream() {
-  if (!streamActive || !initialized) {
-    return;
-  }
-
-  int packetSize = udp.parsePacket();
-  if (packetSize > 0) {
-    Serial.printf("[Audio] Received UDP packet: %d bytes\n", packetSize);
-    // Read UDP packet
-    uint8_t buffer[512];
-    int len = udp.read(buffer, sizeof(buffer));
-    if (len > 0) {
-      Serial.printf("[Audio] Processing %d bytes of ADPCM data\n", len);
-      // Decode ADPCM and play - limit processing to avoid stack overflow
-      int maxSamples =
-          256;  // Process max 256 samples per call to prevent blocking
-      for (int i = 0; i < len && i < maxSamples; i++) {
-        // Each byte contains 2 nibbles (4-bit ADPCM samples)
-        int16_t sample1 = decodeADPCMNibble(buffer[i] >> 4);
-        int16_t sample2 = decodeADPCMNibble(buffer[i] & 0x0F);
-
-        // Debug: Check if decoder is producing valid samples (much less
-        // frequent)
-        static int debug_count = 0;
-        if (debug_count++ % 5000 == 0) {  // Every 5000 samples instead of 1000
-          Serial.printf("[Debug] PCM Samples: %d, %d\n", sample1, sample2);
-        }
-
-        if (out) {
-          // Send mono samples to BOTH Left and Right channels for stereo I2S
-          out->ConsumeSample(&sample1);  // Left channel
-          out->ConsumeSample(&sample1);  // Right channel
-          out->ConsumeSample(&sample2);  // Left channel
-          out->ConsumeSample(&sample2);  // Right channel
-        }
-      }
-
-      // If we processed the full packet, check for more packets
-      if (len >= 512) {
-        // Yield to prevent blocking the RTOS task
-        vTaskDelay(pdMS_TO_TICKS(1));
-      }
-    }
-  }
-}
-
-// ============================================================================
-// ADPCM DECODER
-// ============================================================================
-
-void AudioManager::initADPCM() {
-  adpcmPredictor = 0;
-  adpcmStepIndex = 0;
-}
-
-int16_t AudioManager::decodeADPCMNibble(uint8_t nibble) {
-  // IMA ADPCM step table
-  static const int16_t stepTable[89] = {
-      7,     8,     9,     10,    11,    12,    13,    14,    16,    17,
-      19,    21,    23,    25,    28,    31,    34,    37,    41,    45,
-      50,    55,    60,    66,    73,    80,    88,    97,    107,   118,
-      130,   143,   157,   173,   190,   209,   230,   253,   279,   307,
-      337,   371,   408,   449,   494,   544,   598,   658,   724,   796,
-      876,   963,   1060,  1166,  1282,  1411,  1552,  1707,  1878,  2066,
-      2272,  2499,  2749,  3024,  3327,  3660,  4026,  4428,  4871,  5358,
-      5894,  6484,  7132,  7845,  8630,  9493,  10442, 11487, 12635, 13899,
-      15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767};
-
-  // IMA ADPCM index table
-  static const int8_t indexTable[16] = {-1, -1, -1, -1, 2, 4, 6, 8,
-                                        -1, -1, -1, -1, 2, 4, 6, 8};
-
-  int16_t step = stepTable[adpcmStepIndex];
-  int16_t diff = step >> 3;
-
-  if (nibble & 4) diff += step;
-  if (nibble & 2) diff += step >> 1;
-  if (nibble & 1) diff += step >> 2;
-
-  if (nibble & 8) {
-    adpcmPredictor -= diff;
-  } else {
-    adpcmPredictor += diff;
-  }
-
-  // Clamp predictor
-  if (adpcmPredictor > 32767) adpcmPredictor = 32767;
-  if (adpcmPredictor < -32768) adpcmPredictor = -32768;
-
-  // Update step index
-  adpcmStepIndex += indexTable[nibble];
-  if (adpcmStepIndex < 0) adpcmStepIndex = 0;
-  if (adpcmStepIndex > 88) adpcmStepIndex = 88;
-
-  return adpcmPredictor;
-}
-
-// ============================================================================
 // Audio Request Handler (FREE_SPACE query)
 // ============================================================================
 
@@ -445,14 +297,14 @@ bool AudioManager::handleAudioRequest(MQTTManager& mqtt, byte* payload,
   const char req[] = "REQUEST_FREE_SPACE";
 
   if (length == (sizeof(req) - 1) && memcmp(payload, req, length) == 0) {
-    size_t total = LittleFS.totalBytes();
-    size_t used = LittleFS.usedBytes();
-    size_t freeSpace = total - used;
+    // For SD card, we don't have easy free space calculation
+    // Return a large dummy value indicating SD is available
+    size_t freeSpace = 100000000;  // 100MB dummy value
 
     // Check if current audio file exists and get its size
     size_t currentAudioSize = 0;
-    if (LittleFS.exists(recvFilename)) {
-      File f = LittleFS.open(recvFilename, "r");
+    if (SD.exists(recvFilename)) {
+      File f = SD.open(recvFilename, "r");
       if (f) {
         currentAudioSize = f.size();
         f.close();
@@ -475,6 +327,19 @@ bool AudioManager::handleAudioRequest(MQTTManager& mqtt, byte* payload,
 
 bool AudioManager::handleAudioChunk(MQTTManager& mqtt, byte* payload,
                                     unsigned int length) {
+  static size_t bytesSinceFlush = 0;  // Track bytes written since last flush
+
+  // --- DEBUG: Print Header Preview ---
+  char debugHead[10];
+  int copyLen = length < 9 ? length : 9;
+  memcpy(debugHead, payload, copyLen);
+  debugHead[copyLen] = '\0';
+  // Print hex values of first 6 bytes to check for hidden chars/corruption
+  Serial.printf(
+      "[Audio] RX Payload Preview: '%s' (Hex: %02X %02X %02X %02X %02X %02X)\n",
+      debugHead, payload[0], payload[1], payload[2], payload[3], payload[4],
+      payload[5]);
+
   // ---------- START: expected size ----------
   const char startPrefix[] = "START:";
   if (length > 6 && memcmp(payload, startPrefix, 6) == 0) {
@@ -486,26 +351,25 @@ bool AudioManager::handleAudioChunk(MQTTManager& mqtt, byte* payload,
                   expectedSize);
 
     // Delete old file
-    if (LittleFS.exists(recvFilename)) {
-      LittleFS.remove(recvFilename);
+    if (SD.exists(recvFilename)) {
+      SD.remove(recvFilename);
       Serial.println("[Audio] Old file removed.");
     }
 
-    fsFile = LittleFS.open(recvFilename, "w");
+    fsFile = SD.open(recvFilename, "w");
     if (!fsFile) {
       Serial.println("[Audio] ERROR: Could not open file for writing.");
-      size_t total = LittleFS.totalBytes();
-      size_t used = LittleFS.usedBytes();
-      size_t freeBytes = total - used;
-      Serial.printf("[Audio] LittleFS total=%u used=%u free=%u\n", total, used,
-                    freeBytes);
-
+      // For SD, we can't easily get free space, so just report error
+      Serial.println("[Audio] SD card may be full or not available");
       receivingFile = false;
       return true;
     }
 
     Serial.printf("[Audio] File opened: %s\n", recvFilename.c_str());
     Serial.printf("[Audio] Ready to receive %u bytes\n", expectedSize);
+
+    bytesSinceFlush = 0;  // RESET FLUSH COUNTER HERE
+
     receivingFile = true;
     lastChunkTime = millis();
     return true;
@@ -550,6 +414,17 @@ bool AudioManager::handleAudioChunk(MQTTManager& mqtt, byte* payload,
                       bytesWritten, rawLen);
       }
       receivedSize += rawLen;
+
+      // --- NEW FLUSH LOGIC ---
+      bytesSinceFlush += rawLen;
+      if (bytesSinceFlush >= 32768) {  // Flush every 32KB
+        fsFile.flush();
+        bytesSinceFlush = 0;
+        // Optional debug print (comment out if too noisy)
+        // Serial.println("[Audio] Intermediate Flush (32KB saved)");
+      }
+      // -----------------------
+
       float progress = (receivedSize * 100.0) / expectedSize;
       Serial.printf("[Audio] Chunk %d: %d bytes | Total: %u/%u (%.1f%%)\n",
                     chunkIndex, rawLen, receivedSize, expectedSize, progress);
@@ -574,8 +449,18 @@ bool AudioManager::handleAudioChunk(MQTTManager& mqtt, byte* payload,
   const char endMsg[] = "END";
   if (length == 3 && memcmp(payload, endMsg, 3) == 0) {
     if (receivingFile) {
-      fsFile.close();
+      // --- FIX: Ensure physical write and cool-down ---
+      Serial.println("[Audio] Finalizing write to SD card...");
+      fsFile.flush();  // Force data to physical card
+      fsFile.close();  // Close file handle
+
+      // CRITICAL: Give SD card time to update FAT table
+      // 'Select Failed' happens if we access it while it's busy internally.
+      delay(500);
+      // ------------------------------------------------
+
       receivingFile = false;
+
       Serial.println("[Audio] ============================================");
       Serial.printf("[Audio] FILE UPLOAD COMPLETE!\n");
       Serial.printf("[Audio] Total received: %u bytes (expected: %u)\n",
@@ -583,7 +468,9 @@ bool AudioManager::handleAudioChunk(MQTTManager& mqtt, byte* payload,
       Serial.println("[Audio] ============================================");
 
       // Publish completion status
-      mqtt.publish(TOPIC_RESPONSE, "UPLOAD_COMPLETE");
+      if (mqttManager) {  // Use the pointer directly
+        mqttManager->publish(TOPIC_RESPONSE, "UPLOAD_COMPLETE");
+      }
     } else {
       Serial.println(
           "[Audio] WARNING: Received END but not in receiving mode!");
@@ -592,4 +479,20 @@ bool AudioManager::handleAudioChunk(MQTTManager& mqtt, byte* payload,
   }
 
   return false;
+}
+
+// ============================================================================
+// Additional Methods
+// ============================================================================
+
+bool AudioManager::playFileFromSD(const char* filename) {
+  return playFile(filename);
+}
+
+void AudioManager::setMQTTManager(MQTTManager* mqtt) { mqttManager = mqtt; }
+
+bool AudioManager::isDownloading() {
+  extern bool
+      receivingFile;  // Access the global variable defined at top of file
+  return receivingFile;
 }

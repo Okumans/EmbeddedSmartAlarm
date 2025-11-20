@@ -24,20 +24,6 @@
 // Centralized configuration
 #include "../../include/config.h"
 
-// MQTT Topics - Local Sensors (ESP32) - explicit inside topics
-const char* MQTT_TOPIC_GATEWAY_TEMP = "smartalarm/gateway/temperature/inside";
-const char* MQTT_TOPIC_GATEWAY_HUMIDITY = "smartalarm/gateway/humidity/inside";
-const char* MQTT_TOPIC_STATUS = "smartalarm/gateway/status";
-
-// MQTT Topics - Remote Sensors (from NodeMCU via ESP-NOW) - explicit outside
-// topics
-const char* MQTT_TOPIC_REMOTE_TEMP = "smartalarm/sensor/temperature/outside";
-const char* MQTT_TOPIC_REMOTE_HUMIDITY = "smartalarm/sensor/humidity/outside";
-const char* MQTT_TOPIC_REMOTE_PRESSURE = "smartalarm/sensor/pressure/outside";
-const char* MQTT_TOPIC_REMOTE_UV = "smartalarm/sensor/uvindex/outside";
-const char* MQTT_TOPIC_REMOTE_BATTERY = "smartalarm/sensor/battery/outside";
-const char* MQTT_TOPIC_REMOTE_STATUS = "smartalarm/sensor/status";
-
 // Pin Definitions
 #define DHTPIN 4
 #define DHTTYPE DHT22
@@ -59,6 +45,20 @@ const char* MQTT_TOPIC_REMOTE_STATUS = "smartalarm/sensor/status";
 // Timing Configuration
 #define SENSOR_READ_INTERVAL 2000    // 2 seconds
 #define MQTT_PUBLISH_INTERVAL 10000  // 10 seconds
+
+// MQTT Topics - Local Sensors (ESP32) - explicit inside topics
+const char* MQTT_TOPIC_GATEWAY_TEMP = "smartalarm/gateway/temperature/inside";
+const char* MQTT_TOPIC_GATEWAY_HUMIDITY = "smartalarm/gateway/humidity/inside";
+const char* MQTT_TOPIC_STATUS = "smartalarm/gateway/status";
+
+// MQTT Topics - Remote Sensors (from NodeMCU via ESP-NOW) - explicit outside
+// topics
+const char* MQTT_TOPIC_REMOTE_TEMP = "smartalarm/sensor/temperature/outside";
+const char* MQTT_TOPIC_REMOTE_HUMIDITY = "smartalarm/sensor/humidity/outside";
+const char* MQTT_TOPIC_REMOTE_PRESSURE = "smartalarm/sensor/pressure/outside";
+const char* MQTT_TOPIC_REMOTE_UV = "smartalarm/sensor/uvindex/outside";
+const char* MQTT_TOPIC_REMOTE_BATTERY = "smartalarm/sensor/battery/outside";
+const char* MQTT_TOPIC_REMOTE_STATUS = "smartalarm/sensor/status";
 
 // ============================================================================
 // Global Objects
@@ -478,11 +478,11 @@ void setup() {
 
   // Initialize audio system
   audio.begin();
-  
+  audio.setMQTTManager(&mqtt);
+
   // Setup WiFi and MQTT
   setupWiFi();
   setupMQTT();
-  audio.beginStreamRX();
 
   // Setup ESP-NOW (after WiFi for channel sync)
   setupESPNow();

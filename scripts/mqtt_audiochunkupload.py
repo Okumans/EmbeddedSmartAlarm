@@ -14,7 +14,7 @@ TOPIC_RESPONSE = "esp32/audio_response"
 TOPIC_CHUNK = "esp32/audio_chunk"
 TOPIC_ACK = "esp32/audio_ack"
 
-CHUNK_SIZE = 4096
+CHUNK_SIZE = 3072
 free_space_reply = None
 current_audio_size = None
 last_ack = None
@@ -125,7 +125,7 @@ def send_in_chunks(client, file_path):
         last_ack = None
         print(f"  - Sent chunk {i+1}/{total_chunks}, waiting for ACK...")
         wait_start = time.time()
-        ack_timeout = 5.0  # seconds
+        ack_timeout = 10.0  # seconds
         acknowledged = False
         while time.time() - wait_start < ack_timeout:
             if last_ack is not None and last_ack == i:

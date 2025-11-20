@@ -2,13 +2,12 @@
 #define AUDIO_MANAGER_H
 
 #include <Arduino.h>
-#include <LittleFS.h>
-#include <WiFiUdp.h>
+#include <SD.h>
+#include <SPI.h>
 #include <driver/i2s.h>
-#include <opus.h>
 
 #include "AudioFileSourceID3.h"
-#include "AudioFileSourceLittleFS.h"
+#include "AudioFileSourceSD.h"
 #include "AudioGeneratorMP3.h"
 #include "AudioGeneratorWAV.h"
 #include "AudioOutputI2S.h"
@@ -22,32 +21,24 @@ class MQTTManager;
 #define I2S_LRC 25
 #define I2S_DOUT 27
 
-// Audio modes
-enum AudioMode { MODE_IDLE, MODE_FILE, MODE_STREAM_RX };
-
-// ADPCM Configuration
-#define ADPCM_SAMPLE_RATE 16000
-#define ADPCM_BLOCK_SIZE 256  // Samples per block
-#define UDP_PORT 12345
+// SD Card Configuration
+#define SD_CS 5
+#define SD_MOSI 23
+#define SD_MISO 19
+#define SD_CLK 18
 
 class AudioManager {
  private:
   AudioOutputI2S* out;
-  AudioFileSourceLittleFS* file;
+  AudioFileSourceSD* file;
   AudioFileSourceID3* id3;
-  AudioGeneratorWAV* wav;
   AudioGeneratorMP3* mp3;
 
   bool initialized;
   bool isPlaying;
   float currentVolume;
 
-  // Stream mode variables
-  AudioMode currentMode;
-  WiFiUDP udp;
-  bool streamActive;
-  int16_t adpcmPredictor;
-  int16_t adpcmStepIndex;
+  MQTTManager* mqttManager;  // For status reporting
 
   void cleanup();
 
@@ -60,20 +51,20 @@ class AudioManager {
   AudioManager();
   ~AudioManager();
 
-  // Initialize audio system and SPIFFS
+  // Initialize audio system and SD card
   bool begin();
 
   // Stop and cleanup
   void end();
 
-  // Play audio file from SPIFFS
+  // Play audio file from SD card
   bool playFile(const char* filename);
 
-  // Play WAV file
-  bool playWAV(const char* filename);
-
-  // Play MP3 file
+  // Play MP3 file from SD card
   bool playMP3(const char* filename);
+
+  // Play file from SD card (alias for playFile)
+  bool playFileFromSD(const char* filename);
 
   // Stop currently playing audio
   void stop();
@@ -88,23 +79,20 @@ class AudioManager {
   // Check if audio is currently playing
   bool playing();
 
-  // Stream mode methods
-  bool beginStreamRX(int port = UDP_PORT);
-  void stopStream();
-  void processStream();
-
-  // ADPCM decoder
-  void initADPCM();
-  int16_t decodeADPCMNibble(uint8_t nibble);
-
-  // List all audio files in SPIFFS
+  // List all audio files in SD card
   void listFiles();
 
-  // Get SPIFFS info
-  void printSPIFFSInfo();
+  // Get SD card info
+  void printSDInfo();
 
   // Register MQTT handlers with the manager
   void registerMQTTHandlers(MQTTManager& mqtt);
+
+  // Set MQTT manager for status reporting
+  void setMQTTManager(MQTTManager* mqtt);
+
+  // Check if audio file is currently downloading
+  bool isDownloading();
 };
 
 #endif  // AUDIO_MANAGER_H

@@ -25,22 +25,15 @@ QueueHandle_t audioRxQueue = NULL;
 QueueHandle_t mqttQueue = NULL;
 
 // ============================================================================
-// AUDIO DECODE TASK - Play incoming audio stream or file
+// AUDIO DECODE TASK - Handle audio playback
 // ============================================================================
 void audioDecodeTask(void* parameter) {
   Serial.println("[RTOS] Audio Decode Task started on Core 1");
 
   for (;;) {
-    // Check current audio mode
-    if (audio.playing()) {
-      // File playback mode - handle MP3/WAV
-      audio.loop();
-      vTaskDelay(pdMS_TO_TICKS(10));  // 10ms for MP3 playback
-    } else {
-      // Check if stream mode is active
-      audio.processStream();
-      vTaskDelay(pdMS_TO_TICKS(5));  // 5ms for low latency streaming
-    }
+    // Handle MP3 playback
+    audio.loop();
+    vTaskDelay(pdMS_TO_TICKS(10));  // 10ms for MP3 playback
   }
 }
 
@@ -92,12 +85,21 @@ void sensorTask(void* parameter) {
 
     // Publish to MQTT every 10 seconds
     if ((now - lastPublish) >= publishInterval) {
-      extern const char* MQTT_TOPIC_GATEWAY_TEMP;
-      extern const char* MQTT_TOPIC_GATEWAY_HUMIDITY;
+      // If we are downloading audio, DO NOT publish sensors.
+      // This prevents Core 1 (Sensors) from fighting Core 0 (Network) for the
+      // MQTT client.
+      if (audio.isDownloading()) {
+        Serial.println(
+            "[Sensors] Skipping publish (Audio Download in progress)");
+      } else {
+        extern const char* MQTT_TOPIC_GATEWAY_TEMP;
+        extern const char* MQTT_TOPIC_GATEWAY_HUMIDITY;
 
-      localSensors.publishToMQTT(mqtt, MQTT_TOPIC_GATEWAY_TEMP,
-                                 MQTT_TOPIC_GATEWAY_HUMIDITY);
-      publishRemoteSensorData();
+        localSensors.publishToMQTT(mqtt, MQTT_TOPIC_GATEWAY_TEMP,
+                                   MQTT_TOPIC_GATEWAY_HUMIDITY);
+        publishRemoteSensorData();
+      }
+
       lastPublish = now;
     }
 
@@ -131,8 +133,6 @@ void initRTOSTasks() {
   Serial.println("\n[RTOS] Initializing task queues...");
 
   // Create queues for audio streaming
-  audioTxQueue = xQueueCreate(AUDIO_TX_QUEUE_SIZE, sizeof(AudioPacket));
-  audioRxQueue = xQueueCreate(AUDIO_RX_QUEUE_SIZE, sizeof(AudioPacket));
   mqttQueue =
       xQueueCreate(MQTT_QUEUE_SIZE, sizeof(void*));  // Pointer to message
 

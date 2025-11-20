@@ -138,7 +138,8 @@ void MQTTManager::dispatch(const char* topic, byte* payload,
   }
 
   if (!handled) {
-    Serial.printf("[MQTTManager] ⚠ No handler processed topic: %s\n", topic);
+    Serial.printf("[MQTTManager] ⚠ No handler processed topic: %s\n",
+                  topicStr.c_str());
   }
 }
 

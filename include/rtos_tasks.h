@@ -16,23 +16,15 @@
 #define PRIORITY_SENSOR_PUBLISH 1  // Normal: sensor publishing
 
 // Stack sizes (in words, not bytes!) - Reduced to prevent power issues
-#define STACK_SIZE_AUDIO 3072    // Audio processing
-#define STACK_SIZE_NETWORK 3072  // WebSocket/MQTT networking
-#define STACK_SIZE_SENSOR 2048   // Sensors
-#define STACK_SIZE_DISPLAY 2048  // Display
+#define STACK_SIZE_AUDIO 10240    // Audio processing
+#define STACK_SIZE_NETWORK 10240  // WebSocket/MQTT networking
+#define STACK_SIZE_SENSOR 8192    // Sensors
+#define STACK_SIZE_DISPLAY 8192   // Display
 
 // Queue sizes for audio streaming
 #define AUDIO_TX_QUEUE_SIZE 5  // Outgoing audio packets (reduced)
 #define AUDIO_RX_QUEUE_SIZE 5  // Incoming audio packets (reduced)
 #define MQTT_QUEUE_SIZE 3      // MQTT messages (reduced)
-
-// Audio streaming packet structure
-struct AudioPacket {
-  uint8_t data[256];  // Opus frame (reduced from 512 to save memory)
-  size_t length;
-  uint32_t timestamp;
-  bool isValid;
-};
 
 // Task handles (for suspend/resume control)
 extern TaskHandle_t audioDecodeTaskHandle;

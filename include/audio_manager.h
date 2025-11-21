@@ -2,6 +2,7 @@
 #define AUDIO_MANAGER_H
 
 #include <Arduino.h>
+#include <HTTPClient.h>
 #include <SD.h>
 #include <SPI.h>
 #include <driver/i2s.h>
@@ -51,11 +52,11 @@ class AudioManager {
   size_t receivedSize;
   unsigned long lastChunkTime;
   String recvFilename;
+  bool downloadingInProgress;
 
   void cleanup();
 
   // Internal handler for audio chunks
-  bool handleAudioChunk(MQTTManager& mqtt, byte* payload, unsigned int length);
   bool handleAudioRequest(MQTTManager& mqtt, byte* payload,
                           unsigned int length);
 
@@ -112,6 +113,11 @@ class AudioManager {
 
   // Get download progress (0.0 to 1.0, or -1 if not downloading)
   float getDownloadProgress() const;
+
+  // New methods for HTTP download
+  bool handleDownloadCommand(MQTTManager& mqtt, byte* payload,
+                             unsigned int length);
+  bool downloadFile(const char* url, const char* filename);
 };
 
 #endif  // AUDIO_MANAGER_H

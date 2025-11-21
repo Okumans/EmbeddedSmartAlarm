@@ -32,7 +32,8 @@ AudioManager::AudioManager()
       receivingFile{false},
       expectedSize{0},
       receivedSize{0},
-      lastChunkTime{0} {
+      lastChunkTime{0},
+      downloadingInProgress{false} {
   // Create Recursive Mutex
   audioMutex = xSemaphoreCreateRecursiveMutex();
 }
@@ -261,25 +262,14 @@ static int parseNumberFromPayload(const byte* payload, int start, int end) {
 void AudioManager::registerMQTTHandlers(MQTTManager& mqtt) {
   Serial.println("[Audio] Registering MQTT handlers...");
 
-  // Handler for audio upload requests
+  // Handler for audio download commands
   mqtt.registerHandler(
-      "esp32/audio_request",
+      "esp32/audio_download_cmd",
       [this](MQTTManager& mqtt, const char* topic, byte* payload,
              unsigned int length) -> bool {
-        return this->handleAudioRequest(mqtt, payload, length);
+        return this->handleDownloadCommand(mqtt, payload, length);
       },
-      "AudioRequest",
-      150  // High priority
-  );
-
-  // Handler for audio chunks
-  mqtt.registerHandler(
-      "esp32/audio_chunk",
-      [this](MQTTManager& mqtt, const char* topic, byte* payload,
-             unsigned int length) -> bool {
-        return this->handleAudioChunk(mqtt, payload, length);
-      },
-      "AudioChunk",
+      "AudioDownloadCmd",
       150  // High priority
   );
 
@@ -316,145 +306,136 @@ bool AudioManager::handleAudioRequest(MQTTManager& mqtt, byte* payload,
 }
 
 // ============================================================================
-// Audio Chunk Handler (file upload)
+// Audio Download Command Handler
 // ============================================================================
 
-bool AudioManager::handleAudioChunk(MQTTManager& mqtt, byte* payload,
-                                    unsigned int length) {
-  if (!sdManager || !sdManager->isReady()) return true;
+bool AudioManager::handleDownloadCommand(MQTTManager& mqtt, byte* payload,
+                                         unsigned int length) {
+  String payloadStr = String((char*)payload, length);
+  Serial.printf("[Audio] Received download command: %s\n", payloadStr.c_str());
 
-  // ---------- START: expected size:uuid ----------
-  const char startPrefix[] = "START:";
-  if (length > 6 && memcmp(payload, startPrefix, 6) == 0) {
-    String num = String((char*)(payload + 6), length - 6);
-    // Parse UUID from payload (START:<size>:<uuid>)
-    int colonPos = num.indexOf(':');
-    if (colonPos != -1) {
-      expectedSize = num.substring(0, colonPos).toInt();
-      String audioId = num.substring(colonPos + 1);
-      // Create filename with UUID: /sound_<uuid>.mp3
-      recvFilename = "/sound_" + audioId + ".mp3";
-    } else {
-      expectedSize = num.toInt();
-      recvFilename = "/uploaded.mp3";  // fallback
-    }
-    receivedSize = 0;
-
-    Serial.printf("[Audio] START Expecting file size: %u bytes, UUID: %s\n",
-                  expectedSize, recvFilename.c_str());
-
-    // Delete old file if exists
-    if (sdManager->exists(recvFilename.c_str())) {
-      sdManager->remove(recvFilename.c_str());
-      Serial.println("[Audio] Old file removed.");
-    }
-
-    // Open file for writing
-    if (!sdManager->openForWrite(recvFilename.c_str())) {
-      Serial.println("[Audio] ERROR: Could not open file for writing.");
-      Serial.println("[Audio] SD card may be full or not available");
-      receivingFile = false;
-      return true;
-    }
-
-    Serial.printf("[Audio] File opened: %s\n", recvFilename.c_str());
-    Serial.printf("[Audio] Ready to receive %u bytes\n", expectedSize);
-
-    receivingFile = true;
-    lastChunkTime = millis();
+  // Parse payload: "http://192.168.1.100:8000/file.mp3|101"
+  int separatorIndex = payloadStr.indexOf('|');
+  if (separatorIndex == -1) {
+    Serial.println("[Audio] ERROR: Invalid payload format");
+    mqtt.publish("esp32/audio/status", "download_failed");
     return true;
   }
 
-  // ---------- CHUNK: header then raw bytes ----------
-  const char chunkPrefix[] = "CHUNK:";
-  if (length > 6 && memcmp(payload, chunkPrefix, 6) == 0) {
-    if (!receivingFile) {
-      Serial.println(
-          "[Audio] WARNING: Received chunk but not in receiving mode!");
-      return true;
-    }
+  String url = payloadStr.substring(0, separatorIndex);
+  String idStr = payloadStr.substring(separatorIndex + 1);
 
-    // Parse header: CHUNK:<index>:<total>:<binary_data>
-    int firstColon = -1;
-    int secondColon = -1;
-    for (unsigned int i = 6; i < length; ++i) {
-      if (payload[i] == ':') {
-        if (firstColon == -1)
-          firstColon = i;
-        else {
-          secondColon = i;
-          break;
-        }
-      }
-    }
+  // Construct filename: /sound_{id}.mp3
+  String filename = "/sound_" + idStr + ".mp3";
 
-    if (firstColon == -1 || secondColon == -1) {
-      Serial.println("[Audio] WARNING: Malformed chunk header!");
-      return true;
-    }
+  Serial.printf("[Audio] Downloading from URL: %s to file: %s\n", url.c_str(),
+                filename.c_str());
 
-    int chunkIndex = parseNumberFromPayload(payload, 6, firstColon);
-    int headerLen = secondColon + 1;
-    int rawLen = (int)length - headerLen;
+  // Call downloadFile
+  bool success = downloadFile(url.c_str(), filename.c_str());
 
-    if (rawLen > 0) {
-      // DELEGATE: Write raw bytes to SDManager
-      bool success = sdManager->writeChunk(payload + headerLen, rawLen);
+  // Publish status
+  if (success) {
+    mqtt.publish("esp32/audio/status", "download_success");
+    Serial.println("[Audio] Download completed successfully");
+  } else {
+    mqtt.publish("esp32/audio/status", "download_failed");
+    Serial.println("[Audio] Download failed");
+  }
 
-      if (!success) {
-        Serial.println("[Audio] Write failed! Aborting.");
+  return true;
+}
+
+// ============================================================================
+// HTTP Download Implementation
+// ============================================================================
+
+bool AudioManager::downloadFile(const char* url, const char* filename) {
+  if (!sdManager || !sdManager->isReady()) {
+    Serial.println("[Audio] ERROR: SD Manager not ready");
+    return false;
+  }
+
+  HTTPClient http;
+
+  // 1. INCREASE TIMEOUT (Add this line)
+  http.setTimeout(10000);  // Set timeout to 10 seconds (default is usually 5s)
+
+  http.begin(url);
+  int httpCode = http.GET();
+
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("[Audio] HTTP GET failed, code: %d\n", httpCode);
+    http.end();
+    return false;
+  }
+
+  // Open file for writing
+  if (!sdManager->openForWrite(filename)) {
+    Serial.println("[Audio] ERROR: Could not open file for writing");
+    http.end();
+    return false;
+  }
+
+  // Allocate buffer
+  const size_t bufferSize = 1024;
+  uint8_t* buffer = (uint8_t*)malloc(bufferSize);
+  if (!buffer) {
+    Serial.println("[Audio] ERROR: Memory allocation failed");
+    sdManager->closeFile();
+    http.end();
+    return false;
+  }
+
+  WiFiClient* stream = http.getStreamPtr();
+  int len = http.getSize();  // Get content length
+  size_t totalBytes = 0;
+
+  downloadingInProgress = true;
+
+  // Read and write in loop
+  while (http.connected() && (len > 0 || len == -1)) {
+    size_t size = stream->available();
+    if (size) {
+      int c =
+          stream->readBytes(buffer, ((size > bufferSize) ? bufferSize : size));
+      if (!sdManager->writeChunk(buffer, c)) {
+        Serial.println("[Audio] ERROR: Write to SD failed");
+        free(buffer);
         sdManager->closeFile();
-        receivingFile = false;
-        return true;
+        http.end();
+        downloadingInProgress = false;
+        return false;
       }
 
-      receivedSize += rawLen;
-      float progress = (receivedSize * 100.0) / expectedSize;
-      Serial.printf("[Audio] Chunk %d: %d bytes | Total: %u/%u (%.1f%%)\n",
-                    chunkIndex, rawLen, receivedSize, expectedSize, progress);
+      if (len > 0) len -= c;
+      totalBytes += c;
 
-      // Send ACK for this chunk
-      char ackBuf[32];
-      snprintf(ackBuf, sizeof(ackBuf), "ACK:%d", chunkIndex);
-      bool published = mqtt.publish(TOPIC_ACK, ackBuf);
-      if (published) {
-        Serial.printf("[Audio] ✓ ACK sent for chunk %d\n", chunkIndex);
-      } else {
-        Serial.printf("[Audio] ✗ Failed to send ACK for chunk %d\n",
-                      chunkIndex);
+      if (totalBytes % 1000 == 0) {
+        Serial.printf("[Audio] Downloaded %d bytes\n", totalBytes);
       }
-
-      lastChunkTime = millis();
+      // 2. ENSURE DELAY IS SUFFICIENT (Keep this)
     }
-    return true;
+
+    // 2. ENSURE DELAY IS SUFFICIENT (Keep this)
+    delay(1);
   }
 
-  // ---------- END ----------
-  const char endMsg[] = "END";
-  if (length == 3 && memcmp(payload, endMsg, 3) == 0) {
-    if (receivingFile) {
-      // DELEGATE: Safe close and cool-down
-      sdManager->closeFile();
-      receivingFile = false;
+  // Cleanup
+  free(buffer);
+  sdManager->closeFile();
+  http.end();
+  downloadingInProgress = false;
 
-      Serial.println("[Audio] ============================================");
-      Serial.printf("[Audio] FILE UPLOAD COMPLETE!\n");
-      Serial.printf("[Audio] Total received: %u bytes (expected: %u)\n",
-                    receivedSize, expectedSize);
-      Serial.println("[Audio] ============================================");
-
-      // Publish completion status
-      if (mqttManager) {  // Use the pointer directly
-        mqttManager->publish(TOPIC_RESPONSE, "UPLOAD_COMPLETE");
-      }
-    } else {
-      Serial.println(
-          "[Audio] WARNING: Received END but not in receiving mode!");
-    }
-    return true;
+  // 3. VERIFY FILE SIZE (Optional but recommended check)
+  if (totalBytes == 0) {
+    Serial.println("[Audio] Error: Downloaded 0 bytes");
+    return false;
   }
 
-  return false;
+  Serial.printf("[Audio] Download complete: %u bytes written to %s\n",
+                totalBytes, filename);
+  return true;
 }
 
 // ============================================================================
@@ -469,7 +450,7 @@ void AudioManager::setMQTTManager(MQTTManager* mqtt) { mqttManager = mqtt; }
 
 void AudioManager::setSDManager(SDManager* sd) { sdManager = sd; }
 
-bool AudioManager::isDownloading() { return receivingFile; }
+bool AudioManager::isDownloading() { return downloadingInProgress; }
 
 float AudioManager::getDownloadProgress() const {
   if (!receivingFile || expectedSize == 0) return -1.0f;

@@ -51,6 +51,7 @@
 // MQTT Topics - Local Sensors (ESP32) - explicit inside topics
 const char* MQTT_TOPIC_GATEWAY_TEMP = "smartalarm/gateway/temperature/inside";
 const char* MQTT_TOPIC_GATEWAY_HUMIDITY = "smartalarm/gateway/humidity/inside";
+const char* MQTT_TOPIC_GATEWAY_LIGHT = "smartalarm/gateway/light/inside";
 const char* MQTT_TOPIC_STATUS = "smartalarm/gateway/status";
 
 // MQTT Topics - Remote Sensors (from NodeMCU via ESP-NOW) - explicit outside
@@ -66,7 +67,7 @@ const char* MQTT_TOPIC_REMOTE_STATUS = "smartalarm/sensor/status";
 // Global Objects
 // ============================================================================
 
-SensorManager localSensors(DHTPIN, DHTTYPE);
+SensorManager localSensors(0x23);  // BH1750 I2C address
 TCA9548A tca;
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
@@ -391,7 +392,7 @@ void setup() {
   Serial.println("[System] TCA9548A initialized");
 
   // Initialize components
-  localSensors.begin(&tca);
+  localSensors.begin(&tca, true);
   displayManager.begin(&tca);
   displayManager.showStartup();
 

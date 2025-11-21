@@ -2,89 +2,94 @@
 
 #include "../../include/mqtt_manager.h"
 
-SensorManager::SensorManager(uint8_t dhtPin, uint8_t dhtType)
-    : dht(dhtPin, dhtType),
+SensorManager::SensorManager(uint8_t bh1750Address)
+    : lightSensor(bh1750Address),
       tca(nullptr),
-      currentTemp(0.0),
-      currentHumidity(0.0),
+      currentLightIntensity(0.0),
       lastReadTime(0),
-      temperatureValid(false),
-      humidityValid(false) {}
+      lightValid(false),
+      isQuiet(false) {}
 
-void SensorManager::begin(TCA9548A* tcaMultiplexer) {
+void SensorManager::begin(TCA9548A* tcaMultiplexer, bool quiet) {
   Serial.println("[SensorManager] Initializing...");
 
+  isQuiet = quiet;
   tca = tcaMultiplexer;
 
-  // Initialize DHT22
-  dht.begin();
-  Serial.println("[SensorManager] DHT22 initialized");
+  // Initialize BH1750 via TCA9548A if multiplexer is provided
+  bool sensorInit = false;
+  if (tca) {
+    // Try to initialize on different TCA channels (0-7)
+    for (uint8_t channel = 0; channel < 8; channel++) {
+      tca->openChannel(channel);
+      delay(10);  // Small delay for channel switching
 
-  // Initial read
-  readSensors();
+      if (lightSensor.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
+        Serial.printf("[SensorManager] BH1750 initialized on TCA channel %d\n",
+                      channel);
+        sensorInit = true;
+        break;
+      }
+    }
+    if (!sensorInit) {
+      Serial.println(
+          "[SensorManager] Failed to initialize BH1750 on any TCA channel");
+      // Direct I2C initialization
+      sensorInit = lightSensor.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
+      if (sensorInit) {
+        Serial.println("[SensorManager] BH1750 initialized (direct I2C)");
+      } else {
+        Serial.println("[SensorManager] Failed to initialize BH1750");
+      }
+    }
 
-  Serial.println("[SensorManager] Ready");
+    // Initial read
+    readSensors();
+
+    Serial.println("[SensorManager] Ready");
+  }
 }
 
 void SensorManager::readSensors() {
-  // Read DHT22
-  float temp = dht.readTemperature();
-  float hum = dht.readHumidity();
+  // Read BH1750 light sensor
+  float lux = lightSensor.readLightLevel();
 
-  // Validate and update temperature
-  if (!isnan(temp) && temp > -40 && temp < 80) {
-    currentTemp = temp;
-    temperatureValid = true;
+  // Validate and update light intensity
+  if (!isnan(lux) && lux >= 0 && lux <= 65535) {  // BH1750 range: 0-65535 lux
+    currentLightIntensity = lux;
+    lightValid = true;
   } else {
-    temperatureValid = false;
-    Serial.println("[SensorManager] Invalid temperature reading");
-  }
-
-  // Validate and update humidity
-  if (!isnan(hum) && hum >= 0 && hum <= 100) {
-    currentHumidity = hum;
-    humidityValid = true;
-  } else {
-    humidityValid = false;
-    Serial.println("[SensorManager] Invalid humidity reading");
+    lightValid = false;
+    Serial.println("[SensorManager] Invalid light intensity reading");
   }
 
   lastReadTime = millis();
 
   // Log readings
-  if (hasValidData()) {
-    Serial.printf("[SensorManager] T=%.1f°C, H=%.1f%%\n", currentTemp,
-                  currentHumidity);
+  if (hasValidData() && !isQuiet) {
+    Serial.printf("[SensorManager] Light=%.1f lux\n", currentLightIntensity);
   }
 }
 
-float SensorManager::getTemperature() const { return currentTemp; }
+float SensorManager::getLightIntensity() const { return currentLightIntensity; }
 
-float SensorManager::getHumidity() const { return currentHumidity; }
+bool SensorManager::isLightValid() const { return lightValid; }
 
-bool SensorManager::isTemperatureValid() const { return temperatureValid; }
-
-bool SensorManager::isHumidityValid() const { return humidityValid; }
-
-bool SensorManager::hasValidData() const {
-  return temperatureValid && humidityValid;
-}
+bool SensorManager::hasValidData() const { return lightValid; }
 
 unsigned long SensorManager::getLastReadTime() const { return lastReadTime; }
 
-void SensorManager::publishToMQTT(MQTTManager& mqtt, const char* tempTopic,
-                                  const char* humTopic) {
+void SensorManager::publishToMQTT(MQTTManager& mqtt, const char* lightTopic) {
   if (!mqtt.isConnected() || !hasValidData()) {
     return;
   }
 
-  char tempStr[10];
-  char humStr[10];
-  dtostrf(currentTemp, 4, 1, tempStr);
-  dtostrf(currentHumidity, 4, 1, humStr);
+  char lightStr[10];
+  dtostrf(currentLightIntensity, 6, 1, lightStr);
 
-  mqtt.publish(tempTopic, tempStr);
-  mqtt.publish(humTopic, humStr);
+  mqtt.publish(lightTopic, lightStr);
 
-  Serial.println("[SensorManager] Data published to MQTT");
+  if (!isQuiet) {
+    Serial.println("[SensorManager] Light data published to MQTT");
+  }
 }

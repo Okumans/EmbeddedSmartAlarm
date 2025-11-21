@@ -2,48 +2,45 @@
 #define SENSOR_MANAGER_H
 
 #include <Arduino.h>
-#include <DHT.h>
+#include <BH1750.h>
 #include <TCA9548A.h>
 
 class SensorManager {
  public:
   // Constructor
-  SensorManager(uint8_t dhtPin, uint8_t dhtType);
+  SensorManager(uint8_t bh1750Address = 0x23);
 
   // Initialization
-  void begin(TCA9548A* tcaMultiplexer = nullptr);
+  void begin(TCA9548A* tcaMultiplexer = nullptr, bool quiet = false);
 
   // Sensor reading
   void readSensors();
 
   // Getters for sensor data
-  float getTemperature() const;
-  float getHumidity() const;
+  float getLightIntensity() const;
 
   // Data validation
-  bool isTemperatureValid() const;
-  bool isHumidityValid() const;
+  bool isLightValid() const;
   bool hasValidData() const;
 
   // Timing
   unsigned long getLastReadTime() const;
 
   // MQTT Publishing
-  void publishToMQTT(class MQTTManager& mqtt, const char* tempTopic,
-                     const char* humTopic);
+  void publishToMQTT(class MQTTManager& mqtt, const char* lightTopic);
 
  private:
-  DHT dht;
+  BH1750 lightSensor;
   TCA9548A* tca;
 
+  bool isQuiet;
+
   // Sensor readings
-  float currentTemp;
-  float currentHumidity;
+  float currentLightIntensity;
 
   // State tracking
   unsigned long lastReadTime;
-  bool temperatureValid;
-  bool humidityValid;
+  bool lightValid;
 };
 
 #endif  // SENSOR_MANAGER_H

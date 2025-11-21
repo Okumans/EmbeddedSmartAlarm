@@ -110,10 +110,9 @@ void DisplayManager::drawPageSensors() {
   drawHeader("Sensors");
 
   if (sensorManager) {
-    display.printf("Local: %.1fC %.1f%%\n", sensorManager->getTemperature(),
-                   sensorManager->getHumidity());
+    display.printf("Local: %.0f lux\n", sensorManager->getLightIntensity());
   } else {
-    display.println("Local: --");
+    display.println("Local: -- lux");
   }
 
   display.println();

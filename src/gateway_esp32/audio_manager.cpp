@@ -414,7 +414,6 @@ bool AudioManager::downloadFile(const char* url, const char* filename) {
       if (totalBytes % 1000 == 0) {
         Serial.printf("[Audio] Downloaded %d bytes\n", totalBytes);
       }
-      // 2. ENSURE DELAY IS SUFFICIENT (Keep this)
     }
 
     // 2. ENSURE DELAY IS SUFFICIENT (Keep this)

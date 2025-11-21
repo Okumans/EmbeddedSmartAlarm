@@ -93,11 +93,9 @@ void sensorTask(void* parameter) {
         Serial.println(
             "[Sensors] Skipping publish (Audio Download in progress)");
       } else {
-        extern const char* MQTT_TOPIC_GATEWAY_TEMP;
-        extern const char* MQTT_TOPIC_GATEWAY_HUMIDITY;
+        extern const char* MQTT_TOPIC_GATEWAY_LIGHT;
 
-        localSensors.publishToMQTT(mqtt, MQTT_TOPIC_GATEWAY_TEMP,
-                                   MQTT_TOPIC_GATEWAY_HUMIDITY);
+        localSensors.publishToMQTT(mqtt, MQTT_TOPIC_GATEWAY_LIGHT);
         publishRemoteSensorData();
       }
 

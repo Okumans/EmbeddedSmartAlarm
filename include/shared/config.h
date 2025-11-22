@@ -4,6 +4,8 @@
 
 #include <Arduino.h>
 
+#include "mqtt_topic_config.h"
+
 // WiFi (station) credentials
 static const char* WIFI_SSID = "Pleaseconnecttome";
 static const char* WIFI_PASSWORD = "n1234567!";
@@ -19,19 +21,5 @@ static const char* SOFT_AP_PASSWORD = "12345678";
 static const char* MQTT_SERVER = "broker.hivemq.com";
 static const int MQTT_PORT = 1883;
 static const char* MQTT_CLIENT_ID = "SmartAlarmClock";
-
-// Audio upload topics (gateway <-> uploader)
-static const char* MQTT_TOPIC_AUDIO_REQUEST =
-    "esp32/audio_request";  // uploader -> gateway (REQUEST_FREE_SPACE)
-static const char* MQTT_TOPIC_AUDIO_CHUNK =
-    "esp32/audio_chunk";  // uploader -> gateway (START/CHUNK/END)
-static const char* MQTT_TOPIC_AUDIO_RESPONSE =
-    "esp32/audio_response";  // gateway -> uploader (FREE:xxx)
-static const char* MQTT_TOPIC_AUDIO_ACK =
-    "esp32/audio_ack";  // gateway -> uploader (ACK:<chunk_index>)
-
-// Audio status topics (gateway -> server)
-static const char* MQTT_TOPIC_AUDIO_STATUS =
-    "esp32/audio_status";  // gateway -> server (playing/finished)
 
 #endif  // SMARTALARM_CONFIG_H

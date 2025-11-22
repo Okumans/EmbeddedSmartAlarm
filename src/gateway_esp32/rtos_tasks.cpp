@@ -1,9 +1,10 @@
-#include "../../include/rtos_tasks.h"
+#include "../../include/gateway_esp32/rtos_tasks.h"
 
-#include "../../include/display_manager.h"
-#include "../../include/mqtt_manager.h"
-#include "../../include/sensor_manager.h"
-#include "audio_manager.h"
+#include "../../include/gateway_esp32/audio_manager.h"
+#include "../../include/gateway_esp32/display_manager.h"
+#include "../../include/gateway_esp32/mqtt_manager.h"
+#include "../../include/gateway_esp32/sensor_manager.h"
+#include "../../include/shared/config.h"
 
 // External references to global objects (from main.cpp)
 extern AudioManager audio;
@@ -93,8 +94,6 @@ void sensorTask(void* parameter) {
         Serial.println(
             "[Sensors] Skipping publish (Audio Download in progress)");
       } else {
-        extern const char* MQTT_TOPIC_GATEWAY_LIGHT;
-
         localSensors.publishToMQTT(mqtt, MQTT_TOPIC_GATEWAY_LIGHT);
         publishRemoteSensorData();
       }
@@ -186,18 +185,4 @@ void startRTOSTasks() {
                           PRIORITY_MQTT, &mqttTaskHandle,
                           0  // Core 0 (same core as WiFi stack)
   );
-
-  Serial.println("[RTOS] ✓ All tasks created successfully\n");
-  Serial.println("========================================");
-  Serial.println("Task Assignment:");
-  Serial.println("========================================");
-  Serial.println("Core 0 (Network):");
-  Serial.println("  - WiFi Stack (system)");
-  Serial.println("  - MQTT Task (priority 2)");
-  Serial.println("\nCore 1 (Audio/Display):");
-  Serial.println("  - Audio Decode (priority 3)");
-  Serial.println("  - Audio Encode (priority 3, suspended)");
-  Serial.println("  - Sensor Task (priority 1)");
-  Serial.println("  - Display Task (priority 1)");
-  Serial.println("========================================\n");
 }

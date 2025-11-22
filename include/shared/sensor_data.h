@@ -3,10 +3,6 @@
 
 #include <Arduino.h>
 
-// ============================================================================
-// Shared Data Structure for ESP-NOW Communication
-// ============================================================================
-
 // Data packet structure sent from Sensor Node to Gateway
 // Using pragma pack to ensure same size on ESP8266 and ESP32
 #pragma pack(push, 1)

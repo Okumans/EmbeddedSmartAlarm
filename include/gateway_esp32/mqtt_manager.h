@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include "mqtt_handler.h"
+#include "../shared/mqtt_handler.h"
 
 class MQTTManager {
  private:

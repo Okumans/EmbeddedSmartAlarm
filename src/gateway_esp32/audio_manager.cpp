@@ -1,15 +1,15 @@
-#include "audio_manager.h"
+#include "../../include/gateway_esp32/audio_manager.h"
 
 // MQTT Manager for remote file upload
 #include <SD.h>
 #include <SPI.h>
 #include <WiFi.h>
 
-#include "../../include/mqtt_manager.h"
-#include "../../include/sd_manager.h"
+#include "../../include/gateway_esp32/mqtt_manager.h"
+#include "../../include/gateway_esp32/sd_manager.h"
 
 // ---------------- MQTT TOPICS ----------------
-#include "../../include/config.h"
+#include "../../include/shared/config.h"
 
 #define TOPIC_REQUEST MQTT_TOPIC_AUDIO_REQUEST
 #define TOPIC_RESPONSE MQTT_TOPIC_AUDIO_RESPONSE

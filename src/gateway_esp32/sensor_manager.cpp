@@ -1,6 +1,6 @@
-#include "../../include/sensor_manager.h"
+#include "../../include/gateway_esp32/sensor_manager.h"
 
-#include "../../include/mqtt_manager.h"
+#include "../../include/gateway_esp32/mqtt_manager.h"
 
 SensorManager::SensorManager(uint8_t bh1750Address)
     : lightSensor(bh1750Address),

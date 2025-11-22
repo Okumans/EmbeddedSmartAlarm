@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-HTTP Audio Server for ESP32 Smart Alarm Clock
-
-This script serves audio files via HTTP and coordinates downloads via MQTT.
-"""
 
 import argparse
 import http.server
@@ -13,11 +8,12 @@ import time
 import paho.mqtt.client as mqtt
 import socket
 from uuid import uuid4
+import os
 
-# 1. Add this new class to handle disconnects gracefully
+
 class RobustHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
-        pass  # Optional: silences the default access logs
+        pass  # Silences the default access logs
 
     def handle_one_request(self):
         try:
@@ -25,10 +21,10 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
         except (ConnectionResetError, BrokenPipeError):
             print("[Server] Client disconnected early (Transfer interrupted)")
 
+
 def get_local_ip():
     """Get the local IP address of this machine."""
     try:
-        # Create a socket to get the local IP
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))  # Connect to Google DNS
         local_ip = s.getsockname()[0]
@@ -37,6 +33,7 @@ def get_local_ip():
     except Exception as e:
         print(f"Error getting local IP: {e}")
         return "127.0.0.1"
+
 
 class HTTPAudioServer:
     def __init__(self, file_path, sound_id, port=8000):
@@ -49,7 +46,6 @@ class HTTPAudioServer:
     def start(self):
         """Start the HTTP server in a background thread."""
         # Change to the directory containing the file
-        import os
         os.chdir(os.path.dirname(self.file_path))
 
         try:
@@ -71,6 +67,7 @@ class HTTPAudioServer:
         if self.server:
             self.server.shutdown()
             self.server.server_close()
+
         if self.thread:
             self.thread.join()
 
@@ -145,5 +142,4 @@ def main():
     client.loop_forever()
 
 if __name__ == "__main__":
-    import os
     main()

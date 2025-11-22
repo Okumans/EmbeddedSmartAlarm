@@ -1,11 +1,11 @@
-#include "../../include/display_manager.h"
+#include "../../include/gateway_esp32/display_manager.h"
 
 #include <WiFi.h>
 
-#include "../../include/sd_manager.h"
-#include "../../include/sensor_data.h"
-#include "../../include/sensor_manager.h"
-#include "audio_manager.h"
+#include "../../include/gateway_esp32/audio_manager.h"
+#include "../../include/gateway_esp32/sd_manager.h"
+#include "../../include/gateway_esp32/sensor_manager.h"
+#include "../../include/shared/sensor_data.h"
 
 DisplayManager::DisplayManager()
     : display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1),

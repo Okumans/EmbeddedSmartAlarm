@@ -9,7 +9,7 @@ class TCA9548A;
 class SensorManager;
 class SDManager;
 class AudioManager;
-#include "sensor_data.h"
+#include "../shared/sensor_data.h"
 
 // Display configuration
 #define SCREEN_WIDTH 128

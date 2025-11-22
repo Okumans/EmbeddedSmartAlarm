@@ -6,18 +6,18 @@ extern "C" {
 #include <user_interface.h>
 }
 
-#include <Wire.h>
 #include <Adafruit_BMP085.h>
 #include <DHT.h>
+#include <Wire.h>
 
-#include "../../include/sensor_data.h"
+#include "../../include/shared/sensor_data.h"
 
 // ============================================================================
 // Sensor Pin Definitions
-// ==========================================        ==================================
-#define DHTPIN D4          // D4 (GPIO2)
+// ========================================== ==================================
+#define DHTPIN D4  // D4 (GPIO2)
 #define DHTTYPE DHT22
-#define UV_PIN A0         // GUVA-S12SD UV Sensor
+#define UV_PIN A0  // GUVA-S12SD UV Sensor
 
 DHT dht(DHTPIN, DHTTYPE);
 Adafruit_BMP085 bmp;
@@ -25,11 +25,11 @@ Adafruit_BMP085 bmp;
 // ============================================================================
 // Soft AP Configuration
 // ============================================================================
-const char* SOFT_AP_SSID     = "SmartAlarm-Gateway";
+const char* SOFT_AP_SSID = "SmartAlarm-Gateway";
 const char* SOFT_AP_PASSWORD = "12345678";
 
 // Gateway AP MAC Address (MUST USE ESP32's Soft AP MAC)
-uint8_t gatewayAddress[] = { 0x28, 0x56, 0x2F, 0x4A, 0x15, 0x0D };
+uint8_t gatewayAddress[] = {0x28, 0x56, 0x2F, 0x4A, 0x15, 0x0D};
 
 #define WIFI_CHANNEL 6
 #define SENSOR_READ_INTERVAL 5000  // 5 seconds
@@ -106,11 +106,8 @@ void initESPNow() {
   esp_now_set_self_role(ESP_NOW_ROLE_CONTROLLER);
   esp_now_register_send_cb(onDataSent);
 
-  int addPeerResult = esp_now_add_peer(
-      gatewayAddress,
-      ESP_NOW_ROLE_SLAVE,
-      WIFI_CHANNEL,
-      NULL, 0);
+  int addPeerResult = esp_now_add_peer(gatewayAddress, ESP_NOW_ROLE_SLAVE,
+                                       WIFI_CHANNEL, NULL, 0);
 
   if (addPeerResult == 0) {
     Serial.println("[ESP-NOW] ✓ Peer added");
@@ -145,7 +142,8 @@ void setup() {
   initESPNow();
 
   sensorData.sensorId = SENSOR_NODE_ID;
-  strncpy(sensorData.deviceName, SENSOR_NODE_NAME, sizeof(sensorData.deviceName));
+  strncpy(sensorData.deviceName, SENSOR_NODE_NAME,
+          sizeof(sensorData.deviceName));
   sensorData.batteryLevel = 100;
 
   Serial.println("[System] Ready.\n");
@@ -179,8 +177,10 @@ void readRealSensors() {
   if (!isnan(t)) sensorData.temperature = t;
   if (!isnan(h)) sensorData.humidity = h;
 
-  Serial.printf(" ║ Temp:       %6.2f °C                  ║\n", sensorData.temperature);
-  Serial.printf(" ║ Humidity:   %6.2f %%                   ║\n", sensorData.humidity);
+  Serial.printf(" ║ Temp:       %6.2f °C                  ║\n",
+                sensorData.temperature);
+  Serial.printf(" ║ Humidity:   %6.2f %%                   ║\n",
+                sensorData.humidity);
 
   // -------- BMP180 --------
   if (bmpInitialized) {
@@ -189,21 +189,25 @@ void readRealSensors() {
     sensorData.pressure = 0.0;
   }
 
-  Serial.printf(" ║ Pressure:   %7.2f hPa                 ║\n", sensorData.pressure);
+  Serial.printf(" ║ Pressure:   %7.2f hPa                 ║\n",
+                sensorData.pressure);
 
   // -------- GUVA-S12SD UV Sensor --------
   int raw = analogRead(UV_PIN);
-  float voltage = raw * (3.3 / 1023.0);  // ESP8266 ADC is 0–1V unless divider used
+  float voltage =
+      raw * (3.3 / 1023.0);  // ESP8266 ADC is 0–1V unless divider used
 
   float uvIndex = voltage / 0.1;  // Approximated UVA → UV Index
   sensorData.uvIndex = constrain(uvIndex, 0, 15);
 
-  Serial.printf(" ║ UV Index:   %6.2f                      ║\n", sensorData.uvIndex);
+  Serial.printf(" ║ UV Index:   %6.2f                      ║\n",
+                sensorData.uvIndex);
 
   // -------- Battery Simulation --------
   sensorData.batteryLevel = 100 - (transmissionCount % 100);
 
-  Serial.printf(" ║ Battery:    %3d %%                      ║\n", sensorData.batteryLevel);
+  Serial.printf(" ║ Battery:    %3d %%                      ║\n",
+                sensorData.batteryLevel);
   Serial.println("╚═════════════════════════════════════════╝");
 
   sensorData.timestamp = millis();
@@ -218,10 +222,8 @@ void sendSensorData() {
     return;
   }
 
-  uint8_t result = esp_now_send(
-      gatewayAddress,
-      (uint8_t*)&sensorData,
-      sizeof(sensorData));
+  uint8_t result =
+      esp_now_send(gatewayAddress, (uint8_t*)&sensorData, sizeof(sensorData));
 
   if (result == 0) {
     Serial.println("[ESP-NOW] ✓ Packet sent (queued)");

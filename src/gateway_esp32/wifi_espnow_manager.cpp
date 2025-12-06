@@ -3,6 +3,9 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <time.h>
+#include "../../include/shared/time_sync.h"
+#include <stdlib.h>
 
 #include "../../include/shared/config.h"
 #include "../../include/shared/sensor_data.h"
@@ -12,6 +15,9 @@ extern SensorData remoteSensorData;
 extern bool remoteSensorDataAvailable;
 extern unsigned long lastRemoteDataReceived;
 extern void publishRemoteSensorData();
+
+// Time sync flag
+bool timeSynced = false;
 
 // ESP-NOW callback
 void onESPNowDataReceived(const uint8_t* mac_addr, const uint8_t* data,
@@ -68,6 +74,36 @@ void setupWiFi() {
     esp_wifi_get_channel(&primary, &secondary);
     wifiChannel = primary;
     Serial.printf("[WiFi] WiFi Channel: %d\n", wifiChannel);
+
+    // Configure NTP (UTC). This allows getLocalTime() to return the current time.
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    Serial.println("[WiFi] NTP configured (pool.ntp.org, time.nist.gov)");
+
+    // Set timezone to Thailand (ICT, UTC+7)
+    // POSIX TZ format: "ICT-7" sets local time to UTC+7 (no DST)
+    setenv("TZ", "ICT-7", 1);
+    tzset();
+    Serial.println("[WiFi] Timezone set to ICT (UTC+7)");
+
+    // Wait briefly for time sync; set global flag for other modules
+    struct tm timeinfo;
+    int retries = 0;
+    bool gotTime = false;
+    while (retries < 10) {
+      if (getLocalTime(&timeinfo)) {
+        gotTime = true;
+        break;
+      }
+      Serial.print(".");
+      delay(500);
+      retries++;
+    }
+    timeSynced = gotTime;
+    if (gotTime) {
+      Serial.println("\n[WiFi] ✓ Time synchronized");
+    } else {
+      Serial.println("\n[WiFi] ✗ Time sync failed (still waiting or no connection)");
+    }
 
     // Warning if channel mismatch with expected
     if (wifiChannel != WIFI_CHANNEL) {

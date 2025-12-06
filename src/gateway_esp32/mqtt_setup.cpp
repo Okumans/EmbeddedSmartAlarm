@@ -7,6 +7,9 @@
 #include "../../include/gateway_esp32/mqtt_manager.h"
 #include "../../include/shared/config.h"
 #include "../../include/shared/sensor_data.h"
+#include "../../include/shared/mqtt_time.h"
+#include "../../include/shared/time_sync.h"
+#include "../../include/gateway_esp32/alarm_manager.h"
 
 // External declarations
 extern WiFiClient wifiClient;
@@ -109,6 +112,49 @@ void setupMQTTHandlers() {
 
   // Register AudioManager's own handlers
   audio.registerMQTTHandlers(mqtt);
+
+  // =======================================================================
+  // MQTT TIME HANDLER - Normal Priority (100)
+  // Topic: smartalarm/time
+  // Payload: plain time string (e.g., "2025-12-06 07:30:00" or "07:30:00")
+  // =======================================================================
+  mqtt.registerAndSubscribe(
+      "smartalarm/time",
+      [](MQTTManager& mqtt, const char* topic, byte* payload,
+         unsigned int length) -> bool {
+        String t((char*)payload, length);
+        t.trim();
+        if (t.length() > 0) {
+          mqttTime = t;
+          mqttTimeAvailable = true;
+          Serial.printf("[MQTT] Received time via MQTT: %s\n", t.c_str());
+          // Optionally acknowledge
+          mqtt.publish("smartalarm/time/status", "received");
+          return true;
+        }
+        return false;
+      },
+      "MQTTTime", 100);
+
+  // =======================================================================
+  // ALARM LIST HANDLER - Normal Priority (100)
+  // Payload: CSV of HH:MM values, e.g. "07:30,08:00,14:30"
+  // =======================================================================
+  mqtt.registerHandler(
+      "smartalarm/alarmlist",
+      [](MQTTManager& mqtt, const char* topic, byte* payload,
+         unsigned int length) -> bool {
+        // Parse and store alarms
+        alarmManager.setFromPayload((const char*)payload, length);
+
+        // Acknowledge by publishing status and the parsed list
+        mqtt.publish("smartalarm/alarmlist/status", "ok");
+        mqtt.publish("smartalarm/alarmlist/parsed", alarmManager.toCSV());
+
+        Serial.printf("[MQTT] Alarms updated: %s\n", alarmManager.toCSV().c_str());
+        return true;
+      },
+      "AlarmList", 100);
 
   Serial.println("[MQTT] Handler registration complete\n");
 }

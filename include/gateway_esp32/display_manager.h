@@ -60,6 +60,8 @@ class DisplayManager {
   void drawPageStatus();
   void drawPageAudio();
   void drawHeader(const char* title);
+  // Draw current time (UTC) at top-right of display
+  void drawTime();
 };
 
 #endif  // DISPLAY_MANAGER_H

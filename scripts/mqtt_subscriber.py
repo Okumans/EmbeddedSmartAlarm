@@ -11,9 +11,9 @@ from datetime import datetime
 import sys
 
 # MQTT Configuration (matching the ESP32 settings)
-MQTT_BROKER = "broker.hivemq.com"
+MQTT_BROKER = "ws://broker.hivemq.com:1883"
 MQTT_PORT = 1883
-MQTT_CLIENT_ID = "SmartAlarmClock_Subscriber"
+MQTT_CLIENT_ID = "SSmartAlarmClock"
 
 # Topics to subscribe to (using wildcards)
 TOPICS = [

@@ -1,11 +1,14 @@
 #include "../../include/gateway_esp32/display_manager.h"
 
 #include <WiFi.h>
+#include <time.h>
 
 #include "../../include/gateway_esp32/audio_manager.h"
 #include "../../include/gateway_esp32/sd_manager.h"
 #include "../../include/gateway_esp32/sensor_manager.h"
 #include "../../include/shared/sensor_data.h"
+#include "../../include/shared/mqtt_time.h"
+#include "../../include/shared/time_sync.h"
 
 DisplayManager::DisplayManager()
     : display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1),
@@ -103,7 +106,54 @@ void DisplayManager::drawHeader(const char* title) {
   display.setCursor(0, 0);
   display.println(title);
   display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
+  // Draw current time on the right side of the header
+  drawTime();
   display.setCursor(0, 12);
+}
+
+void DisplayManager::drawTime() {
+  struct tm timeinfo;
+  char timeBuf[16];
+  const char* statusBuf;
+
+  // Prefer time received over MQTT if available
+  if (mqttTimeAvailable && mqttTime.length() > 0) {
+    // Use the mqttTime string (trim to HH:MM:SS if longer)
+    String t = mqttTime;
+    t.trim();
+    if (t.length() > 8) t = t.substring(t.length() - 8);  // last HH:MM:SS
+    strncpy(timeBuf, t.c_str(), sizeof(timeBuf) - 1);
+    timeBuf[sizeof(timeBuf) - 1] = '\0';
+    statusBuf = "MQT";  // indicate source
+  } else {
+    // Fallback to local NTP time
+    if (getLocalTime(&timeinfo, 1000)) {
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d",
+               timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    } else {
+      snprintf(timeBuf, sizeof(timeBuf), "--:--:--");
+    }
+    // Use shared flag to display sync status
+    statusBuf = (timeSynced ? "NTP" : "--");
+  }
+
+  // Calculate positions: time + small status to the right
+  int timeChars = strlen(timeBuf);
+  int statusChars = strlen(statusBuf);
+  int charWidth = 6 * 1;  // 6 pixels per char at size 1
+
+  int timeWidth = timeChars * charWidth;
+  int statusWidth = statusChars * charWidth;
+
+  int padding = 4;
+  int startX = SCREEN_WIDTH - (timeWidth + statusWidth + padding);
+  if (startX < 0) startX = 0;
+
+  display.setCursor(startX, 0);
+  display.println(timeBuf);
+
+  display.setCursor(startX + timeWidth + 2, 0);
+  display.println(statusBuf);
 }
 
 void DisplayManager::drawPageSensors() {

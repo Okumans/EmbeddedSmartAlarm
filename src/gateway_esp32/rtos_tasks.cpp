@@ -5,6 +5,10 @@
 #include "../../include/gateway_esp32/mqtt_manager.h"
 #include "../../include/gateway_esp32/sensor_manager.h"
 #include "../../include/shared/config.h"
+#include <time.h>
+#include "../../include/shared/time_sync.h"
+#include "../../include/shared/sensor_data.h"
+#include "../../include/shared/mqtt_time.h"
 
 // External references to global objects (from main.cpp)
 extern AudioManager audio;
@@ -12,6 +16,9 @@ extern MQTTManager mqtt;
 extern SensorManager localSensors;
 extern DisplayManager displayManager;
 extern void publishRemoteSensorData();
+extern SensorData remoteSensorData;
+extern bool remoteSensorDataAvailable;
+extern unsigned long lastRemoteDataReceived;
 
 // Task handles
 TaskHandle_t audioDecodeTaskHandle = NULL;
@@ -82,6 +89,53 @@ void sensorTask(void* parameter) {
     // Read sensors every 2 seconds
     if ((now - lastSensorRead) >= sensorInterval) {
       localSensors.readSensors();
+      // Print sensor values and current time to Serial for verification
+      // Determine time source: prefer MQTT time if available
+      struct tm timeinfo;
+      char timeBuf[32];
+      const char* timeSource = "--";
+
+      if (mqttTimeAvailable && mqttTime.length() > 0) {
+        // Use mqttTime (take last 8 chars if it contains date+time)
+        String t = mqttTime;
+        t.trim();
+        if (t.length() > 8) t = t.substring(t.length() - 8);
+        strncpy(timeBuf, t.c_str(), sizeof(timeBuf) - 1);
+        timeBuf[sizeof(timeBuf) - 1] = '\0';
+        timeSource = "MQT";
+      } else if (getLocalTime(&timeinfo, 1000)) {
+        snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d",
+                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+        timeSource = (timeSynced ? "NTP" : "unsynced");
+      } else {
+        snprintf(timeBuf, sizeof(timeBuf), "--:--:--");
+        timeSource = "unsynced";
+      }
+
+      Serial.printf("[Data] Time: %s (%s)\n", timeBuf, timeSource);
+
+      // Also print MQTT connectivity
+      Serial.printf("[Data] MQTT connected: %s | MQTT time avail: %s\n",
+                    (mqtt.isConnected() ? "yes" : "no"),
+                    (mqttTimeAvailable ? "yes" : "no"));
+
+      // Local sensor data
+      Serial.printf("[Data] Local Light: %.1f lux (lastRead %lu ms)\n",
+                    localSensors.getLightIntensity(),
+                    localSensors.getLastReadTime());
+
+      // Remote sensor data if available
+      if (remoteSensorDataAvailable) {
+        unsigned long age = (millis() - lastRemoteDataReceived) / 1000;
+        Serial.printf(
+            "[Data] Remote: %s | Temp: %.2f C | Hum: %.2f %% | Press: %.2f hPa | UV: %.2f | Batt: %d%% | age: %lus\n",
+            remoteSensorData.deviceName, remoteSensorData.temperature,
+            remoteSensorData.humidity, remoteSensorData.pressure,
+            remoteSensorData.uvIndex, remoteSensorData.batteryLevel, age);
+      } else {
+        Serial.println("[Data] Remote: No data available");
+      }
+      delay(1000);  // Small delay for Serial output clarity
       lastSensorRead = now;
     }
 

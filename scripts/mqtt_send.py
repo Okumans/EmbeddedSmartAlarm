@@ -6,11 +6,18 @@ Send quick commands to test audio playback
 
 import paho.mqtt.client as mqtt
 import paho.mqtt.publish as publish
+from urllib.parse import urlparse
 import sys
 import time
 
-BROKER = "broker.hivemq.com"
-PORT = 1883
+# Broker as WebSocket URL
+BROKER_URL = "ws://broker.hivemq.com:1883"
+
+# Parse broker URL into host, port and ws path
+_parsed = urlparse(BROKER_URL)
+BROKER = _parsed.hostname
+PORT = _parsed.port or 1883
+WS_PATH = _parsed.path or "/mqtt"
 
 # Global variables for file listing
 file_list_received = None
@@ -22,7 +29,7 @@ def on_message(client, userdata, msg):
     
     payload = msg.payload.decode()
     
-    if msg.topic == "smartalarm/files":
+    if msg.topic == "smartalarm/alarmlist":
         file_list_received = payload
         print(f"\n📁 Files received: {payload}")
         
@@ -46,7 +53,21 @@ def on_message(client, userdata, msg):
 def send(topic, message):
     """Send a single MQTT message"""
     try:
-        publish.single(topic, message, hostname=BROKER, port=PORT)
+        # Use a WebSocket-enabled client for sending
+        client = mqtt.Client(transport="websockets")
+        # Set websocket path if provided
+        try:
+            client.ws_set_options(path=WS_PATH)
+        except Exception:
+            pass
+
+        client.connect(BROKER, PORT, 60)
+        client.loop_start()
+        client.publish(topic, message)
+        # Give the client a short time to send
+        time.sleep(0.2)
+        client.loop_stop()
+        client.disconnect()
         print(f"✓ Sent: [{topic}] {message}")
     except Exception as e:
         print(f"✗ Error: {e}")
@@ -59,13 +80,18 @@ def list_files():
     file_list_received = None
     status_received = None
     
-    # Create MQTT client for receiving
-    client = mqtt.Client()
+    # Create MQTT client for receiving (use websockets transport)
+    client = mqtt.Client(transport="websockets")
+    # Ensure websocket path is set
+    try:
+        client.ws_set_options(path=WS_PATH)
+    except Exception:
+        pass
     client.on_message = on_message
     
     try:
         client.connect(BROKER, PORT, 60)
-        client.subscribe("smartalarm/files")
+        client.subscribe("smartalarm/alarmlist")
         client.subscribe("smartalarm/status")
         client.loop_start()
         

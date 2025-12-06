@@ -29,6 +29,22 @@ void setupMQTT() {
   mqtt.begin(&mqttClient, MQTT_CLIENT_ID, MQTT_TOPIC_STATUS);
   Serial.println("[MQTT] Client configured with 4200 byte buffer");
 
+  // Try an immediate connection if WiFi is already up. This gives faster
+  // feedback on startup instead of waiting for the MQTT task's reconnect
+  // interval. Useful when debugging connectivity issues.
+  Serial.printf("[MQTT] WiFi status: %d | IP: %s\n", WiFi.status(),
+                WiFi.localIP().toString().c_str());
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("[MQTT] Attempting immediate connect...");
+    if (mqtt.reconnect()) {
+      Serial.println("[MQTT] Immediate connection successful");
+    } else {
+      Serial.println("[MQTT] Immediate connection failed (will retry in task loop)");
+    }
+  } else {
+    Serial.println("[MQTT] WiFi not connected; skipping immediate MQTT connect");
+  }
+
   setupMQTTHandlers();
 }
 

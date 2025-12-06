@@ -22,7 +22,7 @@ static const char* SOFT_AP_PASSWORD = "12345678";
 // (for example PubSubClient) do NOT support MQTT over WebSockets.
 // If the ESP32 gateway must connect using WebSockets, replace the
 // client library or use a transport that supports websockets.
-static const char* MQTT_SERVER = "ws://broker.hivemq.com:1883";
+static const char* MQTT_SERVER = "broker.hivemq.com";
 static const int MQTT_PORT = 1883;
 static const char* MQTT_CLIENT_ID = "SmartAlarmClock";
 

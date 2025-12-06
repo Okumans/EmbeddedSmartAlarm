@@ -10,14 +10,16 @@ from urllib.parse import urlparse
 import sys
 import time
 
-# Broker as WebSocket URL
+# Broker as WebSocket URL (use HiveMQ websockets endpoint)
+# Note: public HiveMQ websockets listener is at ws://broker.hivemq.com:8000/mqtt
 BROKER_URL = "ws://broker.hivemq.com:1883"
 
 # Parse broker URL into host, port and ws path
 _parsed = urlparse(BROKER_URL)
 BROKER = _parsed.hostname
-PORT = _parsed.port or 1883
-WS_PATH = _parsed.path or "/mqtt"
+PORT = 1883
+WS_PATH = _parsed.path if _parsed.path else "/mqtt"
+TRANSPORT = "websockets" if _parsed.scheme in ("ws", "wss") else "tcp"
 
 # Global variables for file listing
 file_list_received = None
@@ -53,13 +55,11 @@ def on_message(client, userdata, msg):
 def send(topic, message):
     """Send a single MQTT message"""
     try:
-        # Use a WebSocket-enabled client for sending
-        client = mqtt.Client(transport="websockets")
-        # Set websocket path if provided
-        try:
+        # Create client with appropriate transport (websockets or tcp)
+        client = mqtt.Client(transport=TRANSPORT)
+        # If using websockets ensure websocket path is set before connect
+        if TRANSPORT == "websockets":
             client.ws_set_options(path=WS_PATH)
-        except Exception:
-            pass
 
         client.connect(BROKER, PORT, 60)
         client.loop_start()
@@ -70,7 +70,7 @@ def send(topic, message):
         client.disconnect()
         print(f"✓ Sent: [{topic}] {message}")
     except Exception as e:
-        print(f"✗ Error: {e}")
+        print(f"✗ Error sending to MQTT ({BROKER_URL}): {e}")
 
 def list_files():
     """Send list command and wait for response"""
@@ -80,13 +80,10 @@ def list_files():
     file_list_received = None
     status_received = None
     
-    # Create MQTT client for receiving (use websockets transport)
-    client = mqtt.Client(transport="websockets")
-    # Ensure websocket path is set
-    try:
+    # Create MQTT client for receiving with transport chosen from URL
+    client = mqtt.Client(transport=TRANSPORT)
+    if TRANSPORT == "websockets":
         client.ws_set_options(path=WS_PATH)
-    except Exception:
-        pass
     client.on_message = on_message
     
     try:
@@ -114,7 +111,7 @@ def list_files():
             print("⏰ Timeout waiting for file list response")
             
     except Exception as e:
-        print(f"✗ Error connecting to MQTT: {e}")
+        print(f"✗ Error connecting to MQTT ({BROKER_URL}): {e}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

@@ -9,17 +9,17 @@ Supports both Gateway (local) sensors and Remote sensor node via ESP-NOW
 import paho.mqtt.client as mqtt
 from datetime import datetime
 import sys
+import time
 
 # MQTT Configuration (matching the ESP32 settings)
-MQTT_BROKER = "ws://broker.hivemq.com:1883"
+# Use TCP broker for desktop scripts so gateway (PubSubClient) can also
+# connect to the same broker over TCP (1883).
+MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
 MQTT_CLIENT_ID = "SSmartAlarmClock"
 
-# Topics to subscribe to (using wildcards)
-TOPICS = [
-    "smartalarm/#",
-    "esp32/#",
-]
+# Only subscribe to alarm list
+TOPICS = ["smartalarm/alarmlist", "smartalarm/#", "esp32/#"]
 
 # Store latest values
 gateway_data = {
@@ -80,12 +80,11 @@ def on_message(client, userdata, msg):
     except UnicodeDecodeError:
         payload = f"[Binary data of length {len(msg.payload)}]"
 
-
     # Determine if it's gateway or remote sensor data
     is_gateway = "gateway" in topic
     is_remote = "sensor" in topic
     is_audio = "audio" in topic or "stream" in topic or "play" in topic or "esp32" in topic
-    
+
     source = "Gateway" if is_gateway else "Remote" if is_remote else "System"
 
     # Update data dictionaries based on topic
@@ -93,58 +92,66 @@ def on_message(client, userdata, msg):
         data_dict = gateway_data
         if "temperature" in topic:
             data_dict["temperature"] = payload
-            print(f"🌡️  [{timestamp}] {source} Temperature: {payload}°C")
         elif "humidity" in topic:
             data_dict["humidity"] = payload
-            print(f"💧 [{timestamp}] {source} Humidity: {payload}%")
         elif "status" in topic:
             data_dict["status"] = payload
-            print(f"📡 [{timestamp}] {source} Status: {payload}")
         else:
-            print(f"📨 [{timestamp}] {topic}: {payload}")
+            # Generic gateway topic
+            pass
         data_dict["last_update"] = timestamp
 
     elif is_remote:
         data_dict = remote_data
         if "temperature" in topic:
             data_dict["temperature"] = payload
-            print(f"🌡️  [{timestamp}] {source} Temperature: {payload}°C")
         elif "humidity" in topic:
             data_dict["humidity"] = payload
-            print(f"💧 [{timestamp}] {source} Humidity: {payload}%")
         elif "pressure" in topic:
             data_dict["pressure"] = payload
-            print(f"🌍 [{timestamp}] {source} Pressure: {payload} hPa")
         elif "uvindex" in topic:
             data_dict["uvindex"] = payload
-            print(f"☀️  [{timestamp}] {source} UV Index: {payload}")
         elif "battery" in topic:
             data_dict["battery"] = payload
-            print(f"🔋 [{timestamp}] {source} Battery: {payload}%")
         elif "status" in topic:
             data_dict["status"] = payload
-            print(f"📡 [{timestamp}] {source} Status: {payload}")
         else:
-            print(f"📨 [{timestamp}] {topic}: {payload}")
+            pass
         data_dict["last_update"] = timestamp
 
     elif is_audio:
         audio_data["last_update"] = timestamp
         if "status" in topic:
             audio_data["status"] = payload
-            print(f"🎵 [{timestamp}] Audio Status: {payload}")
         elif "stream" in topic:
             audio_data["stream_status"] = payload
-            print(f"🎤 [{timestamp}] Stream Status: {payload}")
         else:
             audio_data["last_command"] = f"{topic}: {payload}"
-            print(f"🎧 [{timestamp}] {topic}: {payload}")
 
-    else:
-        print(f"📨 [{timestamp}] {topic}: {payload}")
+    # Special handling for alarm list messages (print full details immediately)
+    if topic == "smartalarm/alarmlist" or topic.endswith("/alarmlist"):
+        print("\n" + "=" * 60)
+        print(f"📨 Alarm list received at {timestamp}")
+        print(f"Topic: {topic}")
+        print(f"Payload: {payload}")
+        if payload:
+            alarm_ids = [s.strip() for s in payload.split(',') if s.strip()]
+            print(f"Alarm Count: {len(alarm_ids)}")
+            print(f"Alarm IDs: {alarm_ids}")
+        else:
+            print("No active alarms")
+        print("" + "=" * 60 + "\n")
 
-    # Print summary every time we get data
-    print_summary()
+    # Rate-limit summary printing to avoid flooding the console
+    global _last_summary_print
+    try:
+        last = _last_summary_print
+    except NameError:
+        last = 0
+    SUMMARY_INTERVAL = 5.0  # seconds
+    if time.time() - last >= SUMMARY_INTERVAL:
+        print_summary()
+        _last_summary_print = time.time()
 
 
 def print_summary():
@@ -191,8 +198,8 @@ def main():
     print(f"Client ID: {MQTT_CLIENT_ID}")
     print()
 
-    # Create MQTT client
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, MQTT_CLIENT_ID)
+    # Create MQTT client (use client_id keyword for clarity)
+    client = mqtt.Client(client_id=MQTT_CLIENT_ID)
 
     # Set callbacks
     client.on_connect = on_connect
@@ -200,11 +207,14 @@ def main():
     client.on_message = on_message
 
     try:
-        # Connect to broker
-        print(f"Connecting to {MQTT_BROKER}...")
+        # Attach additional callbacks used by the alarm listener
+        client.on_subscribe = lambda c, u, mid, granted_qos: print(f"✓ Subscription confirmed (QoS: {granted_qos[0]})")
+
+        # Connect to broker (TCP)
+        print(f"Connecting to {MQTT_BROKER}:{MQTT_PORT}...")
         client.connect(MQTT_BROKER, MQTT_PORT, 60)
 
-        # Start the loop
+        # Start the loop (blocking)
         client.loop_forever()
 
     except KeyboardInterrupt:

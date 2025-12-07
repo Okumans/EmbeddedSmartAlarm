@@ -19,7 +19,7 @@ void AlarmQuestionHandler::startQuestionSession() {
   currentAttempt = 1;
   recordingActive = false;
   lastActivityTime = millis();
-  
+
   Serial.println("[AlarmQuestion] Question session started");
   Serial.printf("[AlarmQuestion] Question: %s\n", currentQuestion.c_str());
   Serial.printf("[AlarmQuestion] Attempt 1/%d\n", maxAttempts);
@@ -31,7 +31,7 @@ void AlarmQuestionHandler::startRecording() {
     recordingStartTime = millis();
     lastActivityTime = millis();
     recordingActive = true;
-    
+
     Serial.printf("[AlarmQuestion] Recording started (Attempt %d/%d)\n",
                   currentAttempt, maxAttempts);
   }
@@ -41,9 +41,10 @@ void AlarmQuestionHandler::stopRecording() {
   if (state == QUESTION_RECORDING) {
     recordingActive = false;
     state = QUESTION_VALIDATING;
-    
+
     unsigned long duration = millis() - recordingStartTime;
-    Serial.printf("[AlarmQuestion] Recording stopped (Duration: %lu ms)\n", duration);
+    Serial.printf("[AlarmQuestion] Recording stopped (Duration: %lu ms)\n",
+                  duration);
     Serial.println("[AlarmQuestion] Waiting for validation...");
   }
 }
@@ -55,14 +56,15 @@ void AlarmQuestionHandler::setValidationResult(bool isCorrect) {
       Serial.println("[AlarmQuestion] ✓ CORRECT! Alarm will be deactivated.");
     } else {
       currentAttempt++;
-      
+
       if (currentAttempt > maxAttempts) {
         state = QUESTION_FAILED;
         Serial.println("[AlarmQuestion] ✗ FAILED all attempts!");
       } else {
         state = QUESTION_WRONG;
-        Serial.printf("[AlarmQuestion] ✗ Wrong answer. Try again (Attempt %d/%d)\n",
-                      currentAttempt, maxAttempts);
+        Serial.printf(
+            "[AlarmQuestion] ✗ Wrong answer. Try again (Attempt %d/%d)\n",
+            currentAttempt, maxAttempts);
       }
     }
   }
@@ -73,7 +75,7 @@ void AlarmQuestionHandler::reset() {
   currentQuestion = "";
   currentAttempt = 0;
   recordingActive = false;
-  
+
   Serial.println("[AlarmQuestion] Reset to idle");
 }
 
@@ -81,39 +83,40 @@ String AlarmQuestionHandler::getStatusMessage() const {
   switch (state) {
     case QUESTION_IDLE:
       return "Ready";
-    
+
     case QUESTION_DISPLAYING:
-      return String("Attempt ") + String(currentAttempt) + "/" + String(maxAttempts);
-    
+      return String("Attempt ") + String(currentAttempt) + "/" +
+             String(maxAttempts);
+
     case QUESTION_RECORDING:
       return "Recording...";
-    
+
     case QUESTION_VALIDATING:
       return "Validating...";
-    
+
     case QUESTION_CORRECT:
       return "CORRECT!";
-    
+
     case QUESTION_WRONG:
-      return String("Wrong! ") + String(currentAttempt) + "/" + String(maxAttempts);
-    
+      return String("Wrong! ") + String(currentAttempt) + "/" +
+             String(maxAttempts);
+
     case QUESTION_FAILED:
       return "FAILED";
-    
+
     default:
       return "Unknown";
   }
 }
 
 bool AlarmQuestionHandler::shouldTimeout() const {
-  if (state == QUESTION_IDLE || state == QUESTION_CORRECT || state == QUESTION_FAILED) {
+  if (state == QUESTION_IDLE || state == QUESTION_CORRECT ||
+      state == QUESTION_FAILED) {
     return false;
   }
-  
+
   // Timeout if no activity for 50 seconds
   return (millis() - lastActivityTime) > timeoutMs;
 }
 
-void AlarmQuestionHandler::updateActivity() {
-  lastActivityTime = millis();
-}
+void AlarmQuestionHandler::updateActivity() { lastActivityTime = millis(); }

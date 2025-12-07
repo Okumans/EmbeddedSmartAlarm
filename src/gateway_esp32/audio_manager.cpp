@@ -71,7 +71,7 @@ bool AudioManager::begin() {
 
   // Don't initialize I2S yet - wait until playback needed
   Serial.println("[Audio] Audio manager initialized (I2S deferred)");
-  
+
   initialized = true;
   i2sInitialized = false;
   return true;
@@ -83,7 +83,7 @@ bool AudioManager::ensureI2SInitialized() {
   }
 
   Serial.println("[Audio] Initializing I2S hardware...");
-  
+
   // Initialize I2S output
   out = new AudioOutputI2S();
   out->SetPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
@@ -337,7 +337,8 @@ bool AudioManager::handleDownloadCommand(MQTTManager& mqtt, byte* payload,
 
   // URL decode the payload (replace %7C with |)
   // Supports both simple URLs and presigned URLs with query parameters
-  // Example: http://172.20.10.2:9000/audio/file.mp3?X-Amz-Algorithm=...%7CsoundId
+  // Example:
+  // http://172.20.10.2:9000/audio/file.mp3?X-Amz-Algorithm=...%7CsoundId
   payloadStr.replace("%7C", "|");
   Serial.printf("[Audio] Decoded payload: %s\n", payloadStr.c_str());
 
@@ -345,28 +346,31 @@ bool AudioManager::handleDownloadCommand(MQTTManager& mqtt, byte* payload,
   // URL can be simple or presigned with query parameters
   int separatorIndex = payloadStr.indexOf('|');
   if (separatorIndex == -1) {
-    Serial.println("[Audio] ERROR: Invalid payload format - missing | separator");
+    Serial.println(
+        "[Audio] ERROR: Invalid payload format - missing | separator");
     mqtt.publish("esp32/audio/status", "download_failed|unknown");
     return true;
   }
 
   String url = payloadStr.substring(0, separatorIndex);
   String idStr = payloadStr.substring(separatorIndex + 1);
-  
+
   // Trim whitespace
   url.trim();
   idStr.trim();
-  
+
   // Validate we have both URL and ID
   if (url.length() == 0 || idStr.length() == 0) {
-    Serial.printf("[Audio] ERROR: Invalid payload - URL length: %d, ID length: %d\n", 
-                  url.length(), idStr.length());
+    Serial.printf(
+        "[Audio] ERROR: Invalid payload - URL length: %d, ID length: %d\n",
+        url.length(), idStr.length());
     mqtt.publish("esp32/audio/status", "download_failed|invalid");
     return true;
   }
 
-  // Construct filename: /sound_{id}.mp3
-  String filename = "/sound_" + idStr + ".mp3";
+  // Use fixed filename for alarm downloads to ensure single active audio file
+  // Always save downloaded audio as /audio.mp3
+  String filename = "/audio.mp3";
 
   Serial.printf("[Audio] Sound ID: %s\n", idStr.c_str());
   Serial.printf("[Audio] Download URL: %s\n", url.c_str());
@@ -384,7 +388,7 @@ bool AudioManager::handleDownloadCommand(MQTTManager& mqtt, byte* payload,
     statusMessage = "download_failed|" + idStr;
     Serial.println("[Audio] Download failed");
   }
-  
+
   mqtt.publish("esp32/audio/status", statusMessage);
   Serial.printf("[Audio] Published status: %s\n", statusMessage.c_str());
 

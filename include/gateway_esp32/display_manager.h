@@ -18,7 +18,13 @@ class AudioManager;
 #define TCA_CHANNEL_OLED 1
 
 // Enum for display pages
-enum DisplayPage { PAGE_SENSORS, PAGE_NETWORK, PAGE_STATUS, PAGE_AUDIO, PAGE_ALARM_QUESTION };
+enum DisplayPage {
+  PAGE_SENSORS,
+  PAGE_NETWORK,
+  PAGE_STATUS,
+  PAGE_AUDIO,
+  PAGE_ALARM_QUESTION
+};
 
 class DisplayManager {
  public:
@@ -43,7 +49,8 @@ class DisplayManager {
   void showStartup();
 
   // Alarm question display (override current page)
-  void showAlarmQuestion(const String& question, int attempt, int maxAttempts, const String& status);
+  void showAlarmQuestion(const String& question, int attempt, int maxAttempts,
+                         const String& status);
 
   // Return to normal page cycle
   void returnToNormalDisplay();
@@ -54,7 +61,7 @@ class DisplayManager {
 
   DisplayPage currentPage;
   bool showingAlarmQuestion;
-  
+
   // Cache alarm question state to prevent unnecessary redraws
   String lastQuestionText;
   int lastAttempt;

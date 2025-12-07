@@ -5,13 +5,13 @@
 
 // Alarm question state
 enum AlarmQuestionState {
-  QUESTION_IDLE,              // No question active
-  QUESTION_DISPLAYING,        // Showing question on OLED
-  QUESTION_RECORDING,         // Recording user's answer
-  QUESTION_VALIDATING,        // Validating answer via MQTT
-  QUESTION_CORRECT,           // Answer was correct
-  QUESTION_WRONG,             // Answer was wrong
-  QUESTION_FAILED             // Failed all attempts
+  QUESTION_IDLE,        // No question active
+  QUESTION_DISPLAYING,  // Showing question on OLED
+  QUESTION_RECORDING,   // Recording user's answer
+  QUESTION_VALIDATING,  // Validating answer via MQTT
+  QUESTION_CORRECT,     // Answer was correct
+  QUESTION_WRONG,       // Answer was wrong
+  QUESTION_FAILED       // Failed all attempts
 };
 
 class AlarmQuestionHandler {

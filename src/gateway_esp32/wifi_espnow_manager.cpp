@@ -3,12 +3,12 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
-#include <time.h>
-#include "../../include/shared/time_sync.h"
 #include <stdlib.h>
+#include <time.h>
 
 #include "../../include/shared/config.h"
 #include "../../include/shared/sensor_data.h"
+#include "../../include/shared/time_sync.h"
 
 // External declarations
 extern SensorData remoteSensorData;
@@ -86,7 +86,8 @@ void setupWiFi() {
     wifiChannel = primary;
     Serial.printf("[WiFi] WiFi Channel: %d\n", wifiChannel);
 
-    // Configure NTP (UTC). This allows getLocalTime() to return the current time.
+    // Configure NTP (UTC). This allows getLocalTime() to return the current
+    // time.
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
     Serial.println("[WiFi] NTP configured (pool.ntp.org, time.nist.gov)");
 
@@ -113,7 +114,8 @@ void setupWiFi() {
     if (gotTime) {
       Serial.println("\n[WiFi] ✓ Time synchronized");
     } else {
-      Serial.println("\n[WiFi] ✗ Time sync failed (still waiting or no connection)");
+      Serial.println(
+          "\n[WiFi] ✗ Time sync failed (still waiting or no connection)");
     }
 
     // Warning if channel mismatch with expected
@@ -176,27 +178,28 @@ void setupESPNow() {
 void maintainWiFi() {
   static unsigned long lastReconnectAttempt = 0;
   static int reconnectAttempts = 0;
-  
+
   // WiFi reconnection check (with rate limiting)
   if (WiFi.status() != WL_CONNECTED) {
     unsigned long now = millis();
-    
+
     // Rate limit reconnection attempts (wait 5 seconds between attempts)
     if (now - lastReconnectAttempt < 5000) {
       return;
     }
-    
+
     lastReconnectAttempt = now;
     reconnectAttempts++;
-    
-    Serial.printf("[WiFi] Connection lost (attempt %d), reconnecting...\n", reconnectAttempts);
-    
+
+    Serial.printf("[WiFi] Connection lost (attempt %d), reconnecting...\n",
+                  reconnectAttempts);
+
     // Try simple reconnect first (faster, less disruptive)
     if (reconnectAttempts < 3) {
       WiFi.disconnect(false, false);  // Don't erase credentials
       delay(100);
       WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-      
+
       // Wait up to 10 seconds for connection
       int timeout = 0;
       while (WiFi.status() != WL_CONNECTED && timeout < 20) {
@@ -204,7 +207,7 @@ void maintainWiFi() {
         Serial.print(".");
         timeout++;
       }
-      
+
       if (WiFi.status() == WL_CONNECTED) {
         Serial.println("\n[WiFi] ✓ Reconnected successfully");
         reconnectAttempts = 0;  // Reset counter on success

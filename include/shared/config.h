@@ -33,6 +33,6 @@ static const int AUDIO_SERVER_PORT = 4000;
 
 // Alarm configuration
 static const char* DEFAULT_ALARM_SOUND =
-    "/alarm.mp3";  // Default alarm sound file on SD card
+    "/audio.mp3";  // Default alarm sound file on SD card
 
 #endif  // SMARTALARM_CONFIG_H

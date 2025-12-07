@@ -2,14 +2,12 @@
 #define ALARM_MANAGER_H
 
 #include <Arduino.h>
+
 #include <vector>
 
 class AlarmManager {
  public:
   AlarmManager();
-
-  // Initialize and load persistent settings from LittleFS
-  void begin();
 
   // Parse a payload like "07:30,08:00,14:30" and store HH:MM entries
   void setFromPayload(const char* payload, unsigned int length);
@@ -33,17 +31,12 @@ class AlarmManager {
   // Clear all triggered states (call at start of new minute)
   void clearTriggeredStates();
 
-  // Alarm sound file management
-  void setAlarmSound(const String& soundFile);
-  String getAlarmSound() const;
+  // Get alarm sound file (always returns "/audio.mp3")
+  String getAlarmSound() const { return "/audio.mp3"; }
 
  private:
-  // File operations
-  bool loadAlarmSoundFromFile();
-  bool saveAlarmSoundToFile();
   std::vector<String> alarms;
   std::vector<String> triggeredAlarms;  // Track which alarms have been triggered
-  String alarmSoundFile;  // Custom alarm sound file path
 };
 
 // Global instance (defined in .cpp)

@@ -91,15 +91,16 @@ bool QuestionManager::saveQuestionsToFile() {
   // Open file with FILE_WRITE mode (creates if doesn't exist)
   File file = SPIFFS.open(QUESTIONS_FILE, FILE_WRITE);
   if (!file) {
-    Serial.printf("[QuestionManager] ✗ Failed to open %s for writing\n", QUESTIONS_FILE);
-    Serial.printf("[QuestionManager] SPIFFS total: %d, used: %d\n", 
+    Serial.printf("[QuestionManager] ✗ Failed to open %s for writing\n",
+                  QUESTIONS_FILE);
+    Serial.printf("[QuestionManager] SPIFFS total: %d, used: %d\n",
                   SPIFFS.totalBytes(), SPIFFS.usedBytes());
     return false;
   }
 
   // Clear existing content by truncating
   file.seek(0);
-  
+
   // Write questions
   for (int i = 0; i < questionCount; i++) {
     file.println(questionCache[i]);

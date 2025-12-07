@@ -39,15 +39,15 @@ class SDManager {
 
  private:
   bool _ready;
-  File _file;               // Current active file for writing
-  size_t _bytesSinceFlush;  // For efficient flushing
-  SemaphoreHandle_t _mutex; // Protect SD access
-  uint8_t _errorCount;      // Track consecutive errors
+  File _file;                // Current active file for writing
+  size_t _bytesSinceFlush;   // For efficient flushing
+  SemaphoreHandle_t _mutex;  // Protect SD access
+  uint8_t _errorCount;       // Track consecutive errors
   unsigned long _lastErrorTime;
-  
+
   bool _lock(uint32_t timeout_ms = 1000);
   void _unlock();
-  bool _reinitialize();     // Try to recover SD card
+  bool _reinitialize();  // Try to recover SD card
 };
 
 #endif  // SD_MANAGER_H

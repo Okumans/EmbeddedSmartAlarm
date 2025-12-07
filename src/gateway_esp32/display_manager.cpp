@@ -6,8 +6,8 @@
 #include "../../include/gateway_esp32/audio_manager.h"
 #include "../../include/gateway_esp32/sd_manager.h"
 #include "../../include/gateway_esp32/sensor_manager.h"
-#include "../../include/shared/sensor_data.h"
 #include "../../include/shared/mqtt_time.h"
+#include "../../include/shared/sensor_data.h"
 #include "../../include/shared/time_sync.h"
 
 DisplayManager::DisplayManager()
@@ -43,18 +43,16 @@ bool DisplayManager::begin(TCA9548A* tca) {
 void DisplayManager::update() {
   if (!tcaMultiplexer) return;
 
+  // Skip update entirely if showing alarm question (it manages its own display)
+  if (showingAlarmQuestion) {
+    return;
+  }
+
   tcaMultiplexer->openChannel(TCA_CHANNEL_OLED);
 
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
-
-  // Skip normal pages if showing alarm question
-  if (showingAlarmQuestion) {
-    display.display();
-    tcaMultiplexer->closeChannel(TCA_CHANNEL_OLED);
-    return;
-  }
 
   switch (currentPage) {
     case PAGE_SENSORS:
@@ -137,8 +135,8 @@ void DisplayManager::drawTime() {
   } else {
     // Fallback to local NTP time
     if (getLocalTime(&timeinfo, 1000)) {
-      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d",
-               timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", timeinfo.tm_hour,
+               timeinfo.tm_min, timeinfo.tm_sec);
     } else {
       snprintf(timeBuf, sizeof(timeBuf), "--:--:--");
     }
@@ -252,14 +250,13 @@ void DisplayManager::drawPageAudio() {
   }
 }
 
-void DisplayManager::showAlarmQuestion(const String& question, int attempt, int maxAttempts, const String& status) {
+void DisplayManager::showAlarmQuestion(const String& question, int attempt,
+                                       int maxAttempts, const String& status) {
   if (!tcaMultiplexer) return;
 
   // Only redraw if something changed
-  if (showingAlarmQuestion && 
-      lastQuestionText == question && 
-      lastAttempt == attempt && 
-      lastStatus == status) {
+  if (showingAlarmQuestion && lastQuestionText == question &&
+      lastAttempt == attempt && lastStatus == status) {
     return;  // No change, skip redraw
   }
 
@@ -268,22 +265,22 @@ void DisplayManager::showAlarmQuestion(const String& question, int attempt, int 
   lastQuestionText = question;
   lastAttempt = attempt;
   lastStatus = status;
-  
+
   tcaMultiplexer->openChannel(TCA_CHANNEL_OLED);
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
-  
+
   // Title
   display.setCursor(0, 0);
   display.setTextSize(1);
   display.println("ALARM QUESTION");
   display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
-  
+
   // Question (wrap text at ~21 chars per line)
   display.setCursor(0, 14);
   display.setTextSize(1);
-  
+
   // Simple text wrapping
   int lineY = 14;
   int charCount = 0;
@@ -298,16 +295,16 @@ void DisplayManager::showAlarmQuestion(const String& question, int attempt, int 
       charCount++;
     }
   }
-  
+
   // Status line
   display.setCursor(0, 48);
   display.setTextSize(1);
   display.println(status);
-  
+
   // Attempt counter
   display.setCursor(0, 56);
   display.printf("Attempt: %d/%d", attempt, maxAttempts);
-  
+
   display.display();
   tcaMultiplexer->closeChannel(TCA_CHANNEL_OLED);
 }

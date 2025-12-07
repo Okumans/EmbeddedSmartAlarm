@@ -1,20 +1,8 @@
 #include "../../include/gateway_esp32/alarm_manager.h"
-#include <SPIFFS.h>
 
 AlarmManager alarmManager;
 
-AlarmManager::AlarmManager() : alarmSoundFile("/alarm.mp3") {}
-
-void AlarmManager::begin() {
-  Serial.println("[AlarmManager] Initializing...");
-  
-  // Load alarm sound from file
-  if (loadAlarmSoundFromFile()) {
-    Serial.printf("[AlarmManager] ✓ Loaded alarm sound: %s\n", alarmSoundFile.c_str());
-  } else {
-    Serial.printf("[AlarmManager] Using default alarm sound: %s\n", alarmSoundFile.c_str());
-  }
-}
+AlarmManager::AlarmManager() {}
 
 void AlarmManager::setFromPayload(const char* payload, unsigned int length) {
   String s((char*)payload, length);
@@ -94,69 +82,4 @@ void AlarmManager::setAlarmTriggered(const String& alarmTime, bool triggered) {
   }
 }
 
-void AlarmManager::clearTriggeredStates() {
-  triggeredAlarms.clear();
-}
-
-void AlarmManager::setAlarmSound(const String& soundFile) {
-  alarmSoundFile = soundFile;
-  Serial.printf("[AlarmManager] Alarm sound set to: %s\n", soundFile.c_str());
-  
-  // Save to file for persistence
-  saveAlarmSoundToFile();
-}
-
-String AlarmManager::getAlarmSound() const {
-  return alarmSoundFile;
-}
-
-bool AlarmManager::loadAlarmSoundFromFile() {
-  if (!SPIFFS.begin()) {
-    Serial.println("[AlarmManager] ✗ SPIFFS not mounted");
-    return false;
-  }
-
-  const char* filepath = "/alarm_sound.txt";
-  
-  if (!SPIFFS.exists(filepath)) {
-    return false;
-  }
-
-  File file = SPIFFS.open(filepath, "r");
-  if (!file) {
-    Serial.println("[AlarmManager] ✗ Failed to open alarm sound file");
-    return false;
-  }
-
-  String line = file.readStringUntil('\n');
-  line.trim();
-  file.close();
-
-  if (line.length() > 0) {
-    alarmSoundFile = line;
-    return true;
-  }
-
-  return false;
-}
-
-bool AlarmManager::saveAlarmSoundToFile() {
-  if (!SPIFFS.begin()) {
-    Serial.println("[AlarmManager] ✗ SPIFFS not mounted, cannot save");
-    return false;
-  }
-
-  const char* filepath = "/alarm_sound.txt";
-  
-  File file = SPIFFS.open(filepath, FILE_WRITE);
-  if (!file) {
-    Serial.println("[AlarmManager] ✗ Failed to save alarm sound file");
-    return false;
-  }
-
-  file.println(alarmSoundFile);
-  file.close();
-  
-  Serial.printf("[AlarmManager] ✓ Saved alarm sound to file: %s\n", alarmSoundFile.c_str());
-  return true;
-}
+void AlarmManager::clearTriggeredStates() { triggeredAlarms.clear(); }

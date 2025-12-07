@@ -27,7 +27,7 @@ extern bool remoteSensorDataAvailable;
 void setupMQTT() {
   // Configure MQTT client settings (don't call WiFiClient methods yet)
   mqttClient.setBufferSize(2048);  // Reduced from 4200 to save memory
-  mqttClient.setKeepAlive(60);  // Reduce keep-alive interval
+  mqttClient.setKeepAlive(60);     // Reduce keep-alive interval
   mqttClient.setSocketTimeout(5);  // Socket timeout in seconds
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
 
@@ -67,14 +67,10 @@ void setupMQTTHandlers() {
       "smartalarm/play_audio",
       [](MQTTManager& mqtt, const char* topic, byte* payload,
          unsigned int length) -> bool {
-        String filename((char*)payload, length);
-        if (!filename.startsWith("/")) {
-          filename = "/" + filename;
-        }
-
-        bool success = audio.playFile(filename.c_str());
+        // For this build we only support the single audio file `/audio.mp3`.
+        const char* fixed = "/audio.mp3";
+        bool success = audio.playFile(fixed);
         mqtt.publish("smartalarm/audio/status", success ? "playing" : "error");
-
         return true;
       },
       "AudioPlayback", 150);
@@ -111,11 +107,9 @@ void setupMQTTHandlers() {
           mqtt.publish("smartalarm/status", "volume:" + String(vol, 2));
           return true;
         } else if (message.startsWith("play:")) {
-          String filename = message.substring(5);
-          if (!filename.startsWith("/")) {
-            filename = "/" + filename;
-          }
-          bool success = audio.playFile(filename.c_str());
+          // Ignore provided filename and play the single supported file
+          const char* fixed = "/audio.mp3";
+          bool success = audio.playFile(fixed);
           mqtt.publish("smartalarm/status", success ? "playing" : "error");
           return true;
         } else if (message == "start_recording") {
@@ -197,35 +191,6 @@ void setupMQTTHandlers() {
         return true;
       },
       "AlarmList", 100);
-
-  // =======================================================================
-  // ALARM SOUND HANDLER - Normal Priority (100)
-  // Topic: smartalarm/alarm/sound
-  // Payload: Sound file path (e.g., "/sound_EbBW3i3L.mp3" or "sound_123.mp3")
-  // =======================================================================
-  mqtt.registerAndSubscribe(
-      "smartalarm/alarm/sound",
-      [](MQTTManager& mqtt, const char* topic, byte* payload,
-         unsigned int length) -> bool {
-        String soundFile((char*)payload, length);
-        soundFile.trim();
-
-        // Ensure leading slash
-        if (!soundFile.startsWith("/")) {
-          soundFile = "/" + soundFile;
-        }
-
-        // Update alarm sound
-        alarmManager.setAlarmSound(soundFile);
-
-        // Acknowledge
-        mqtt.publish("smartalarm/alarm/sound/status", "ok");
-        mqtt.publish("smartalarm/alarm/sound/current", soundFile);
-
-        Serial.printf("[MQTT] Alarm sound updated to: %s\n", soundFile.c_str());
-        return true;
-      },
-      "AlarmSound", 100);
 
   // =======================================================================
   // ALARM QUESTION HANDLER - Normal Priority (100)

@@ -3,8 +3,8 @@
 #include <Adafruit_Sensor.h>
 #include <Arduino.h>
 #include <DHT.h>
-#include <SPIFFS.h>
 #include <PubSubClient.h>
+#include <SPIFFS.h>
 #include <WiFi.h>
 #include <Wire.h>
 #include <esp_now.h>
@@ -12,9 +12,9 @@
 #include <soc/rtc_cntl_reg.h>
 #include <soc/soc.h>
 
+#include "../../include/gateway_esp32/alarm_manager.h"
 #include "../../include/gateway_esp32/audio_manager.h"
 #include "../../include/gateway_esp32/audio_stream_manager.h"
-#include "../../include/gateway_esp32/alarm_manager.h"
 #include "../../include/gateway_esp32/button_manager.h"
 #include "../../include/gateway_esp32/display_manager.h"
 #include "../../include/gateway_esp32/mqtt_manager.h"
@@ -97,7 +97,6 @@ void setup() {
   Serial.println("Smart Alarm Clock - Starting");
   Serial.println("========================================\n");
 
-
   // Initialize I2C
   Wire.begin(SDA_PIN, SCL_PIN);
 
@@ -134,7 +133,7 @@ void setup() {
     Serial.println("[System] Question storage will NOT work");
   } else {
     Serial.println("[System] ✓ SPIFFS mounted successfully");
-    Serial.printf("[System] Total: %d bytes, Used: %d bytes\n", 
+    Serial.printf("[System] Total: %d bytes, Used: %d bytes\n",
                   SPIFFS.totalBytes(), SPIFFS.usedBytes());
   }
 
@@ -176,8 +175,8 @@ void setup() {
     Serial.println("[System] Question Manager initialization failed");
   }
 
-  // Initialize alarm manager (loads persistent alarm sound)
-  alarmManager.begin();
+  // Alarm manager uses fixed sound file: /audio.mp3
+  Serial.println("[System] Alarm sound file: /audio.mp3");
 
   // Setup ESP-NOW (after WiFi for channel sync)
   setupESPNow();

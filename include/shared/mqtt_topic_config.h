@@ -48,4 +48,24 @@ static const char* MQTT_TOPIC_AUDIO_ACK =
 static const char* MQTT_TOPIC_AUDIO_STATUS =
     "esp32/audio_status";  // gateway -> server (playing/finished)
 
+// ============================================================================
+// ALARM QUESTION TOPICS (LLM/STT Integration)
+// ============================================================================
+static const char* MQTT_TOPIC_QUESTION =
+    "smartalarm/question";  // server -> gateway (trivia question)
+static const char* MQTT_TOPIC_QUESTION_STATUS =
+    "smartalarm/question/status";  // gateway -> server (received)
+static const char* MQTT_TOPIC_ANSWER_AUDIO =
+    "smartalarm/answer/audio";  // gateway -> server (audio recording chunks)
+static const char* MQTT_TOPIC_ANSWER_TEXT =
+    "smartalarm/answer/text";  // server -> gateway (transcribed text)
+static const char* MQTT_TOPIC_ANSWER_VALIDATION =
+    "smartalarm/answer/validation";  // server -> gateway (valid/invalid)
+static const char* MQTT_TOPIC_RECORDING_START =
+    "smartalarm/recording/start";  // gateway -> server (start recording)
+static const char* MQTT_TOPIC_RECORDING_STOP =
+    "smartalarm/recording/stop";  // gateway -> server (stop recording)
+static const char* MQTT_TOPIC_ALARM_DEACTIVATE =
+    "smartalarm/alarm/deactivate";  // system (alarm stopped)
+
 #endif  // MQTT_TOPIC_CONFIG_H

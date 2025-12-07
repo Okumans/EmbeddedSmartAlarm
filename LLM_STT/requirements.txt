@@ -1,0 +1,21 @@
+## Python Dependencies for LLM/STT Alarm System
+
+# MQTT Communication
+paho-mqtt>=1.6.1
+
+# Google Gemini AI
+google-generativeai>=0.3.0
+
+# Speech-to-Text (Whisper)
+faster-whisper>=0.10.0  # Preferred - much faster with CUDA
+openai-whisper>=20230314  # Fallback if faster-whisper unavailable
+
+# Audio Processing
+torch>=2.0.0  # Required for Whisper
+torchaudio>=2.0.0
+
+# Text-to-Speech (Optional - for question playback)
+gTTS>=2.5.0
+
+# Database
+# sqlite3 is built into Python - no installation needed

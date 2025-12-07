@@ -26,4 +26,7 @@ static const char* MQTT_SERVER = "broker.hivemq.com";
 static const int MQTT_PORT = 1883;
 static const char* MQTT_CLIENT_ID = "SmartAlarmClock";
 
+// Alarm configuration
+static const char* DEFAULT_ALARM_SOUND = "/alarm.mp3";  // Default alarm sound file on SD card
+
 #endif  // SMARTALARM_CONFIG_H

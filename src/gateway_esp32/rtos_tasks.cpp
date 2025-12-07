@@ -4,6 +4,8 @@
 #include "../../include/gateway_esp32/display_manager.h"
 #include "../../include/gateway_esp32/mqtt_manager.h"
 #include "../../include/gateway_esp32/sensor_manager.h"
+#include "../../include/gateway_esp32/alarm_manager.h"
+#include "../../include/gateway_esp32/alarm_question_handler.h"
 #include "../../include/shared/config.h"
 #include <time.h>
 #include "../../include/shared/time_sync.h"
@@ -27,6 +29,7 @@ TaskHandle_t websocketTaskHandle = NULL;
 TaskHandle_t mqttTaskHandle = NULL;
 TaskHandle_t sensorTaskHandle = NULL;
 TaskHandle_t displayTaskHandle = NULL;
+TaskHandle_t alarmTaskHandle = NULL;
 
 // Queues
 QueueHandle_t audioTxQueue = NULL;
@@ -135,6 +138,19 @@ void sensorTask(void* parameter) {
       } else {
         Serial.println("[Data] Remote: No data available");
       }
+
+      // Audio download status
+      if (audio.isDownloading()) {
+        float progress = audio.getDownloadProgress();
+        if (progress >= 0) {
+          Serial.printf("[Data] Audio Download: In Progress (%.1f%%)\n", progress * 100);
+        } else {
+          Serial.println("[Data] Audio Download: In Progress");
+        }
+      } else {
+        Serial.println("[Data] Audio Download: Idle");
+      }
+
       delay(1000);  // Small delay for Serial output clarity
       lastSensorRead = now;
     }
@@ -186,6 +202,90 @@ void displayTask(void* parameter) {
 }
 
 // ============================================================================
+// ALARM TASK - Check alarms and trigger audio
+// ============================================================================
+void alarmTask(void* parameter) {
+  Serial.println("[RTOS] Alarm Task started on Core 0");
+
+  String lastMinute = "";
+
+  for (;;) {
+    // Get current time
+    String currentTime = "";
+    struct tm timeinfo;
+    char timeBuf[32];
+
+    // Prefer MQTT time, fallback to NTP time
+    if (mqttTimeAvailable && mqttTime.length() > 0) {
+      // Use MQTT time (extract last 8 chars if it contains date+time)
+      String t = mqttTime;
+      t.trim();
+      if (t.length() > 8) {
+        currentTime = t.substring(t.length() - 8);  // HH:MM:SS
+      } else {
+        currentTime = t;
+      }
+    } else if (getLocalTime(&timeinfo, 1000)) {
+      // Use NTP time
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d",
+               timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+      currentTime = String(timeBuf);
+    }
+
+    // Only proceed if we have a valid time
+    if (currentTime.length() >= 5) {
+      String currentMinute = currentTime.substring(0, 5);  // HH:MM
+
+      // Clear triggered states when minute changes
+      if (currentMinute != lastMinute) {
+        alarmManager.clearTriggeredStates();
+        lastMinute = currentMinute;
+      }
+
+      // Check if any alarm matches current time
+      String matchedAlarm = alarmManager.checkAlarms(currentTime);
+      if (matchedAlarm.length() > 0) {
+        // Alarm triggered!
+        Serial.printf("⏰ ALARM TRIGGERED: %s\n", matchedAlarm.c_str());
+        
+        // Mark this alarm as triggered to prevent re-triggering
+        alarmManager.setAlarmTriggered(matchedAlarm, true);
+
+        // Start question session if question is available
+        if (alarmQuestion.getQuestion().length() > 0) {
+          Serial.println("[Alarm] Starting question challenge mode");
+          alarmQuestion.startQuestionSession();
+        }
+
+        // Play alarm sound (use custom sound if set, otherwise default)
+        String soundFile = alarmManager.getAlarmSound();
+        if (audio.playFile(soundFile.c_str())) {
+          Serial.printf("[Alarm] Playing alarm sound: %s\n", soundFile.c_str());
+          
+          // Publish alarm notification via MQTT
+          String alarmMsg = "Alarm triggered at " + matchedAlarm;
+          mqtt.publish("smartalarm/alarm/triggered", alarmMsg);
+        } else {
+          Serial.println("[Alarm] ERROR: Failed to play alarm sound!");
+          mqtt.publish("smartalarm/alarm/error", "Failed to play alarm sound");
+        }
+      }
+
+      // Check if question was answered correctly -> stop alarm
+      if (alarmQuestion.shouldDeactivateAlarm() && audio.playing()) {
+        Serial.println("[Alarm] Question answered correctly - Stopping alarm");
+        audio.stop();
+        mqtt.publish("smartalarm/alarm/deactivated", "Question answered correctly");
+        alarmQuestion.reset();
+      }
+    }
+
+    // Check every second
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+}
+
+// ============================================================================
 // INITIALIZATION
 // ============================================================================
 void initRTOSTasks() {
@@ -230,6 +330,12 @@ void startRTOSTasks() {
   xTaskCreatePinnedToCore(displayTask, "Display", STACK_SIZE_DISPLAY, NULL,
                           PRIORITY_DISPLAY, &displayTaskHandle,
                           1  // Core 1
+  );
+
+  // Alarm checking - NORMAL priority on Core 0
+  xTaskCreatePinnedToCore(alarmTask, "AlarmCheck", STACK_SIZE_ALARM, NULL,
+                          PRIORITY_ALARM_CHECK, &alarmTaskHandle,
+                          0  // Core 0 (same core as MQTT/Network)
   );
 
   // ========== CORE 0: Network & Communication ==========

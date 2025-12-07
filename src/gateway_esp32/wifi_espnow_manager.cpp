@@ -22,15 +22,16 @@ bool timeSynced = false;
 // ESP-NOW callback
 void onESPNowDataReceived(const uint8_t* mac_addr, const uint8_t* data,
                           int data_len) {
-  Serial.println("\n[ESP-NOW] ← Data received!");
-  Serial.print("[ESP-NOW] From MAC: ");
-  for (int i = 0; i < 6; i++) {
-    Serial.printf("%02X", mac_addr[i]);
-    if (i < 5) Serial.print(":");
-  }
-  Serial.printf(" | Size: %d bytes\n", data_len);
-
   if (data_len == sizeof(SensorData)) {
+    // Valid data - log and process
+    Serial.println("\n[ESP-NOW] ← Data received!");
+    Serial.print("[ESP-NOW] From MAC: ");
+    for (int i = 0; i < 6; i++) {
+      Serial.printf("%02X", mac_addr[i]);
+      if (i < 5) Serial.print(":");
+    }
+    Serial.printf(" | Size: %d bytes\n", data_len);
+
     memcpy(&remoteSensorData, data, sizeof(SensorData));
     remoteSensorDataAvailable = true;
     lastRemoteDataReceived = millis();
@@ -38,8 +39,18 @@ void onESPNowDataReceived(const uint8_t* mac_addr, const uint8_t* data,
     // Immediately publish to MQTT
     publishRemoteSensorData();
   } else {
-    Serial.printf("[ESP-NOW] ✗ Invalid data size! Expected %d, got %d\n",
-                  sizeof(SensorData), data_len);
+    // Invalid data - log only occasionally to reduce spam
+    static unsigned long lastInvalidLog = 0;
+    if (millis() - lastInvalidLog > 10000) {  // Log once per 10 seconds
+      Serial.printf("[ESP-NOW] ✗ Invalid size: %d bytes (expected %d) from ",
+                    data_len, sizeof(SensorData));
+      for (int i = 0; i < 6; i++) {
+        Serial.printf("%02X", mac_addr[i]);
+        if (i < 5) Serial.print(":");
+      }
+      Serial.println(" - ignoring");
+      lastInvalidLog = millis();
+    }
   }
 }
 

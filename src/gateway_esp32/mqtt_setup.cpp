@@ -10,6 +10,7 @@
 #include "../../include/shared/mqtt_time.h"
 #include "../../include/shared/time_sync.h"
 #include "../../include/gateway_esp32/alarm_manager.h"
+#include "../../include/gateway_esp32/alarm_question_handler.h"
 
 // External declarations
 extern WiFiClient wifiClient;
@@ -56,7 +57,7 @@ void setupMQTTHandlers() {
   // =======================================================================
 
   // Audio playback command
-  mqtt.registerHandler(
+  mqtt.registerAndSubscribe(
       "smartalarm/play_audio",
       [](MQTTManager& mqtt, const char* topic, byte* payload,
          unsigned int length) -> bool {
@@ -76,12 +77,15 @@ void setupMQTTHandlers() {
   // SYSTEM COMMANDS - Normal Priority (100)
   // =======================================================================
 
-  mqtt.registerHandler(
+  mqtt.registerAndSubscribe(
       "smartalarm/commands",
       [](MQTTManager& mqtt, const char* topic, byte* payload,
          unsigned int length) -> bool {
         String message((char*)payload, length);
         message.toLowerCase();
+
+        Serial.printf("[MQTT] Received system command: %s\n",
+                      message.c_str());
 
         if (message == "stop_audio") {
           audio.stop();
@@ -120,6 +124,16 @@ void setupMQTTHandlers() {
           status += "|wifi:" + String(WiFi.RSSI()) + "dBm";
           mqtt.publish("smartalarm/status", status);
           return true;
+        } else if (message == "list_alarms") {
+          // Send current alarm list
+          String alarmList = alarmManager.toCSV();
+          if (alarmList.length() > 0) {
+            mqtt.publish("smartalarm/alarms", alarmList);
+            mqtt.publish("smartalarm/status", "alarms_listed");
+          } else {
+            mqtt.publish("smartalarm/status", "no_alarms");
+          }
+          return true;
         }
 
         return false;  // Not handled by this handler
@@ -156,7 +170,7 @@ void setupMQTTHandlers() {
   // ALARM LIST HANDLER - Normal Priority (100)
   // Payload: CSV of HH:MM values, e.g. "07:30,08:00,14:30"
   // =======================================================================
-  mqtt.registerHandler(
+  mqtt.registerAndSubscribe(
       "smartalarm/alarmlist",
       [](MQTTManager& mqtt, const char* topic, byte* payload,
          unsigned int length) -> bool {
@@ -171,6 +185,74 @@ void setupMQTTHandlers() {
         return true;
       },
       "AlarmList", 100);
+
+  // =======================================================================
+  // ALARM SOUND HANDLER - Normal Priority (100)
+  // Topic: smartalarm/alarm/sound
+  // Payload: Sound file path (e.g., "/sound_EbBW3i3L.mp3" or "sound_123.mp3")
+  // =======================================================================
+  mqtt.registerAndSubscribe(
+      "smartalarm/alarm/sound",
+      [](MQTTManager& mqtt, const char* topic, byte* payload,
+         unsigned int length) -> bool {
+        String soundFile((char*)payload, length);
+        soundFile.trim();
+        
+        // Ensure leading slash
+        if (!soundFile.startsWith("/")) {
+          soundFile = "/" + soundFile;
+        }
+        
+        // Update alarm sound
+        alarmManager.setAlarmSound(soundFile);
+        
+        // Acknowledge
+        mqtt.publish("smartalarm/alarm/sound/status", "ok");
+        mqtt.publish("smartalarm/alarm/sound/current", soundFile);
+        
+        Serial.printf("[MQTT] Alarm sound updated to: %s\n", soundFile.c_str());
+        return true;
+      },
+      "AlarmSound", 100);
+
+  // =======================================================================
+  // ALARM QUESTION HANDLER - Normal Priority (100)
+  // Topic: smartalarm/question
+  // Payload: Question text in Thai
+  // =======================================================================
+  mqtt.registerAndSubscribe(
+      "smartalarm/question",
+      [](MQTTManager& mqtt, const char* topic, byte* payload,
+         unsigned int length) -> bool {
+        String question((char*)payload, length);
+        alarmQuestion.setQuestion(question);
+        
+        mqtt.publish("smartalarm/question/status", "received");
+        Serial.printf("[MQTT] Question received: %s\n", question.c_str());
+        return true;
+      },
+      "AlarmQuestion", 100);
+
+  // =======================================================================
+  // ANSWER VALIDATION HANDLER - Normal Priority (100)
+  // Topic: smartalarm/answer/validation
+  // Payload: "valid" or "invalid"
+  // =======================================================================
+  mqtt.registerAndSubscribe(
+      "smartalarm/answer/validation",
+      [](MQTTManager& mqtt, const char* topic, byte* payload,
+         unsigned int length) -> bool {
+        String result((char*)payload, length);
+        result.toLowerCase();
+        
+        bool isCorrect = result.indexOf("valid") >= 0 && result.indexOf("invalid") < 0;
+        alarmQuestion.setValidationResult(isCorrect);
+        
+        Serial.printf("[MQTT] Answer validation: %s (%s)\n",
+                      result.c_str(), isCorrect ? "CORRECT" : "WRONG");
+        return true;
+      },
+      "AnswerValidation", 100);
 
   Serial.println("[MQTT] Handler registration complete\n");
 }

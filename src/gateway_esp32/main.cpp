@@ -121,6 +121,9 @@ void setup() {
   setupWiFi();
   setupMQTT();
 
+  // Register audio MQTT handlers (must be after setupMQTT)
+  audio.registerMQTTHandlers(mqtt);
+
   // Setup ESP-NOW (after WiFi for channel sync)
   setupESPNow();
 

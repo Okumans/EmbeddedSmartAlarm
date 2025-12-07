@@ -157,6 +157,7 @@ void MQTTManager::dispatch(const char* topic, byte* payload,
 
 void MQTTManager::globalCallback(char* topic, byte* payload,
                                  unsigned int length) {
+  Serial.printf("[MQTTManager] Global callback received topic: %s\n", topic);
   if (instance) {
     instance->dispatch(topic, payload, length);
   } else {

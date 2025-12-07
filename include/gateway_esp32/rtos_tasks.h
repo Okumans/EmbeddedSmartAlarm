@@ -14,12 +14,14 @@
 #define PRIORITY_SENSOR_READ 1     // Normal: sensor reading
 #define PRIORITY_DISPLAY 1         // Normal: display updates
 #define PRIORITY_SENSOR_PUBLISH 1  // Normal: sensor publishing
+#define PRIORITY_ALARM_CHECK 1     // Normal: alarm checking
 
 // Stack sizes (in words, not bytes!) - Reduced to prevent power issues
 #define STACK_SIZE_AUDIO 10240    // Audio processing
 #define STACK_SIZE_NETWORK 10240  // WebSocket/MQTT networking
 #define STACK_SIZE_SENSOR 8192    // Sensors
 #define STACK_SIZE_DISPLAY 8192   // Display
+#define STACK_SIZE_ALARM 4096     // Alarm checking
 
 // Queue sizes for audio streaming
 #define AUDIO_TX_QUEUE_SIZE 5  // Outgoing audio packets (reduced)
@@ -33,6 +35,7 @@ extern TaskHandle_t websocketTaskHandle;
 extern TaskHandle_t mqttTaskHandle;
 extern TaskHandle_t sensorTaskHandle;
 extern TaskHandle_t displayTaskHandle;
+extern TaskHandle_t alarmTaskHandle;
 
 // Queues for inter-task communication
 extern QueueHandle_t audioTxQueue;  // Local mic → WebSocket → Server
@@ -45,6 +48,7 @@ void audioEncodeTask(void* parameter);  // Encode mic input for streaming
 void mqttTask(void* parameter);         // Handle MQTT communication
 void sensorTask(void* parameter);       // Read sensors periodically
 void displayTask(void* parameter);      // Update display periodically
+void alarmTask(void* parameter);        // Check alarms and trigger audio
 
 // Initialization
 void initRTOSTasks();

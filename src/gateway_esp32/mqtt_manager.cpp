@@ -1,7 +1,8 @@
 #include "../../include/gateway_esp32/mqtt_manager.h"
 
-#include <algorithm>
 #include <WiFi.h>
+
+#include <algorithm>
 
 MQTTManager* MQTTManager::instance = nullptr;
 

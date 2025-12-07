@@ -25,7 +25,9 @@ class AudioStreamManager {
   static constexpr int I2S_WS = 33;   // Word Select (LRCL)
   static constexpr int I2S_SD = 34;   // Serial Data (DOUT)
   static constexpr int I2S_SCK = 32;  // Serial Clock (BCLK)
-  static constexpr i2s_port_t I2S_PORT = I2S_NUM_0;
+  // Use I2S_NUM_1 for microphone input so playback (I2S_NUM_0) and mic can
+  // operate simultaneously without driver conflicts.
+  static constexpr i2s_port_t I2S_PORT = I2S_NUM_1;
   static constexpr int SAMPLE_RATE = 16000;
   static constexpr int BITS_PER_SAMPLE = 16;
   static constexpr int I2S_READ_BITS = 32;  // INMP441 outputs 32-bit

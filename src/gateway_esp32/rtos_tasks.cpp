@@ -256,6 +256,9 @@ void alarmTask(void* parameter) {
 
       // Check if any alarm matches current time
       String matchedAlarm = alarmManager.checkAlarms(currentTime);
+      static bool alarmSessionActive = false;
+      static String sessionAlarmTime = "";
+      static String sessionSoundFile = "";
       if (matchedAlarm.length() > 0 && !alarmQuestion.isActive()) {
         // Alarm triggered!
         Serial.printf("⏰ ALARM TRIGGERED: %s\n", matchedAlarm.c_str());
@@ -288,6 +291,11 @@ void alarmTask(void* parameter) {
               "challenge");
         }
 
+        // NOTE: Do NOT start microphone streaming here. The microphone will be
+        // initialized only when the user presses the button to answer. This
+        // keeps the alarm sound playing uninterrupted until the user requests
+        // to record (avoids early mic initialization failures reported earlier).
+
         // Play alarm sound at 100% volume
         audio.setVolume(1.0);
         String soundFile = alarmManager.getAlarmSound();
@@ -295,6 +303,14 @@ void alarmTask(void* parameter) {
           Serial.printf("[Alarm] Playing alarm sound: %s\n", soundFile.c_str());
           mqtt.publish("smartalarm/alarm/triggered",
                        "Alarm triggered at " + matchedAlarm);
+          // Mark session active and store sound/time
+          alarmSessionActive = true;
+          sessionAlarmTime = matchedAlarm;
+          sessionSoundFile = soundFile;
+
+          // Notify external system that alarm is playing
+          String statusPayload = String("off|") + matchedAlarm;
+          mqtt.publish("smartalarm/alarmstatus", statusPayload);
         } else {
           Serial.println("[Alarm] ERROR: Failed to play alarm sound!");
           mqtt.publish("smartalarm/alarm/error", "Failed to play alarm sound");
@@ -315,6 +331,15 @@ void alarmTask(void* parameter) {
             alarmQuestion.getQuestion(), alarmQuestion.getCurrentAttempt(),
             alarmQuestion.getMaxAttempts(), alarmQuestion.getStatusMessage());
 
+        // If session active but playback stopped, restart playback to loop
+        if (alarmSessionActive && !audio.playing()) {
+          // Try to restart the same file
+          if (sessionSoundFile.length() > 0) {
+            Serial.println("[Alarm] Restarting alarm playback (loop)");
+            audio.playFile(sessionSoundFile.c_str());
+          }
+        }
+
         // Check if should stop alarm
         if (alarmQuestion.shouldDeactivateAlarm() && audio.playing()) {
           Serial.println(
@@ -322,6 +347,16 @@ void alarmTask(void* parameter) {
           audio.stop();
           mqtt.publish("smartalarm/alarm/deactivated",
                        "Question answered correctly");
+
+          // End session
+          alarmSessionActive = false;
+          sessionAlarmTime = "";
+          sessionSoundFile = "";
+          // Stop mic streaming if it was started for this session
+          if (audioStream.isRecording()) {
+            Serial.println("[Alarm] Stopping mic streaming after session end");
+            audioStream.stopRecording();
+          }
 
           // Show success message
           displayManager.showAlarmQuestion(
@@ -347,11 +382,30 @@ void alarmTask(void* parameter) {
           vTaskDelay(pdMS_TO_TICKS(3000));  // Show for 3 seconds
           displayManager.returnToNormalDisplay();
           alarmQuestion.reset();
+
+          // End session
+          alarmSessionActive = false;
+          sessionAlarmTime = "";
+          sessionSoundFile = "";
         }
 
         // Handle button for recording (only during alarm)
         static bool wasPressed = false;
+        // Update button state (debounce & gestures) before reading
+        ButtonGesture g = button.update();
         bool isPressed = button.isPressed();
+
+        // Log raw press events for debugging (helps verify physical press)
+        if (isPressed && !wasPressed) {
+          Serial.printf("[Button] Detected PRESS while audio.playing=%d\n",
+                        audio.playing() ? 1 : 0);
+          mqtt.publish("smartalarm/button", "pressed");
+        }
+        if (!isPressed && wasPressed) {
+          Serial.printf("[Button] Detected RELEASE while audio.playing=%d\n",
+                        audio.playing() ? 1 : 0);
+          mqtt.publish("smartalarm/button", "released");
+        }
 
         if (isPressed && !wasPressed) {
           // Button just pressed - start recording
@@ -363,13 +417,51 @@ void alarmTask(void* parameter) {
           // Turn on LED
           digitalWrite(2, HIGH);
 
-          // Reduce volume to 30% during recording
-          audio.setVolume(0.3);
+          // Fade volume down to 0 (mute) so playback is inaudible before
+          // initializing the microphone. We stop playback to avoid any driver
+          // conflicts when installing the mic I2S driver; the playback will
+          // be resumed after the recording ends.
+          float prevVol = audio.getVolume();
+          if (audio.playing()) {
+            Serial.printf("[Button] Fading volume down from %.2f to 0\n",
+                          prevVol);
+            for (float v = prevVol; v > 0.01; v -= 0.1) {
+              audio.setVolume(v);
+              vTaskDelay(pdMS_TO_TICKS(40));
+            }
+            audio.setVolume(0.0);
+            // Stop playback to release I2S output if necessary
+            if (sessionSoundFile.length() > 0) {
+              Serial.println("[Button] Stopping playback to allow mic init");
+              audio.stop();
+            }
+          } else {
+            audio.setVolume(0.0);
+          }
 
-          // Start recording
+          // Start recording and only mark pressed if mic successfully starts.
           alarmQuestion.startRecording();
-          audioStream.startRecording();
-          wasPressed = true;
+          bool micStarted = audioStream.startRecording();
+          int micRetries = 0;
+          while (!micStarted && micRetries < 3) {
+            Serial.println("[Button] Mic start failed - retrying...");
+            vTaskDelay(pdMS_TO_TICKS(500));
+            micStarted = audioStream.startRecording();
+            micRetries++;
+          }
+          if (!micStarted) {
+            Serial.println("[Button] ERROR: Mic failed to start after retries");
+            // If mic couldn't start, try to resume playback so user still hears
+            // the alarm.
+            if (sessionSoundFile.length() > 0) {
+              audio.playFile(sessionSoundFile.c_str());
+              // keep muted until release; user can press again
+            }
+            wasPressed = false;
+          } else {
+            Serial.println("[Button] Mic started - recording active");
+            wasPressed = true;
+          }
 
           // Update display
           displayManager.showAlarmQuestion(
@@ -382,12 +474,30 @@ void alarmTask(void* parameter) {
           // Turn off LED
           digitalWrite(2, LOW);
 
-          // Restore volume to 100%
-          audio.setVolume(1.0);
-
           // Stop recording
           audioStream.stopRecording();
           alarmQuestion.stopRecording();
+
+          // Resume playback if we stopped it earlier
+          if (!audio.playing()) {
+            String resumeFile = sessionSoundFile.length() > 0
+                                    ? sessionSoundFile
+                                    : alarmManager.getAlarmSound();
+            if (resumeFile.length() > 0) {
+              Serial.printf("[Button] Resuming playback: %s\n",
+                            resumeFile.c_str());
+              audio.playFile(resumeFile.c_str());
+            }
+          }
+
+          // Fade volume back up to full (resume playback audibly)
+          float targetVol = 1.0;
+          Serial.println("[Button] Fading volume up to resume playback");
+          for (float v = 0.0; v < targetVol - 0.01; v += 0.1) {
+            audio.setVolume(v);
+            vTaskDelay(pdMS_TO_TICKS(50));
+          }
+          audio.setVolume(targetVol);
           wasPressed = false;
 
           // Update display

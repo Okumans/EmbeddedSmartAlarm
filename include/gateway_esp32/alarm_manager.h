@@ -36,7 +36,8 @@ class AlarmManager {
 
  private:
   std::vector<String> alarms;
-  std::vector<String> triggeredAlarms;  // Track which alarms have been triggered
+  std::vector<String>
+      triggeredAlarms;  // Track which alarms have been triggered
 };
 
 // Global instance (defined in .cpp)

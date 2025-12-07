@@ -1,22 +1,25 @@
 #include "../../include/gateway_esp32/rtos_tasks.h"
 
+#include <time.h>
+
+#include "../../include/gateway_esp32/alarm_manager.h"
+#include "../../include/gateway_esp32/alarm_question_handler.h"
 #include "../../include/gateway_esp32/audio_manager.h"
 #include "../../include/gateway_esp32/display_manager.h"
 #include "../../include/gateway_esp32/mqtt_manager.h"
+#include "../../include/gateway_esp32/question_manager.h"
 #include "../../include/gateway_esp32/sensor_manager.h"
-#include "../../include/gateway_esp32/alarm_manager.h"
-#include "../../include/gateway_esp32/alarm_question_handler.h"
 #include "../../include/shared/config.h"
-#include <time.h>
-#include "../../include/shared/time_sync.h"
-#include "../../include/shared/sensor_data.h"
 #include "../../include/shared/mqtt_time.h"
+#include "../../include/shared/sensor_data.h"
+#include "../../include/shared/time_sync.h"
 
 // External references to global objects (from main.cpp)
 extern AudioManager audio;
 extern MQTTManager mqtt;
 extern SensorManager localSensors;
 extern DisplayManager displayManager;
+extern QuestionManager questionManager;
 extern void publishRemoteSensorData();
 extern SensorData remoteSensorData;
 extern bool remoteSensorDataAvailable;
@@ -80,7 +83,7 @@ void mqttTask(void* parameter) {
 void sensorTask(void* parameter) {
   Serial.println("[RTOS] Sensor Task started on Core 1");
 
-  const TickType_t sensorInterval = pdMS_TO_TICKS(2000);    // 2 seconds
+  const TickType_t sensorInterval = pdMS_TO_TICKS(10000);   // 10 seconds
   const TickType_t publishInterval = pdMS_TO_TICKS(10000);  // 10 seconds
 
   TickType_t lastSensorRead = xTaskGetTickCount();
@@ -107,8 +110,8 @@ void sensorTask(void* parameter) {
         timeBuf[sizeof(timeBuf) - 1] = '\0';
         timeSource = "MQT";
       } else if (getLocalTime(&timeinfo, 1000)) {
-        snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d",
-                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+        snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", timeinfo.tm_hour,
+                 timeinfo.tm_min, timeinfo.tm_sec);
         timeSource = (timeSynced ? "NTP" : "unsynced");
       } else {
         snprintf(timeBuf, sizeof(timeBuf), "--:--:--");
@@ -131,7 +134,8 @@ void sensorTask(void* parameter) {
       if (remoteSensorDataAvailable) {
         unsigned long age = (millis() - lastRemoteDataReceived) / 1000;
         Serial.printf(
-            "[Data] Remote: %s | Temp: %.2f C | Hum: %.2f %% | Press: %.2f hPa | UV: %.2f | Batt: %d%% | age: %lus\n",
+            "[Data] Remote: %s | Temp: %.2f C | Hum: %.2f %% | Press: %.2f hPa "
+            "| UV: %.2f | Batt: %d%% | age: %lus\n",
             remoteSensorData.deviceName, remoteSensorData.temperature,
             remoteSensorData.humidity, remoteSensorData.pressure,
             remoteSensorData.uvIndex, remoteSensorData.batteryLevel, age);
@@ -143,7 +147,8 @@ void sensorTask(void* parameter) {
       if (audio.isDownloading()) {
         float progress = audio.getDownloadProgress();
         if (progress >= 0) {
-          Serial.printf("[Data] Audio Download: In Progress (%.1f%%)\n", progress * 100);
+          Serial.printf("[Data] Audio Download: In Progress (%.1f%%)\n",
+                        progress * 100);
         } else {
           Serial.println("[Data] Audio Download: In Progress");
         }
@@ -227,8 +232,8 @@ void alarmTask(void* parameter) {
       }
     } else if (getLocalTime(&timeinfo, 1000)) {
       // Use NTP time
-      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d",
-               timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", timeinfo.tm_hour,
+               timeinfo.tm_min, timeinfo.tm_sec);
       currentTime = String(timeBuf);
     }
 
@@ -247,21 +252,27 @@ void alarmTask(void* parameter) {
       if (matchedAlarm.length() > 0) {
         // Alarm triggered!
         Serial.printf("⏰ ALARM TRIGGERED: %s\n", matchedAlarm.c_str());
-        
+
         // Mark this alarm as triggered to prevent re-triggering
         alarmManager.setAlarmTriggered(matchedAlarm, true);
 
-        // Start question session if question is available
-        if (alarmQuestion.getQuestion().length() > 0) {
+        // Get question from QuestionManager
+        String question = questionManager.getQuestionForAlarm();
+        if (question.length() > 0) {
+          alarmQuestion.setQuestion(question);
           Serial.println("[Alarm] Starting question challenge mode");
           alarmQuestion.startQuestionSession();
+        } else {
+          Serial.println(
+              "[Alarm] No question available, alarm will play without "
+              "challenge");
         }
 
         // Play alarm sound (use custom sound if set, otherwise default)
         String soundFile = alarmManager.getAlarmSound();
         if (audio.playFile(soundFile.c_str())) {
           Serial.printf("[Alarm] Playing alarm sound: %s\n", soundFile.c_str());
-          
+
           // Publish alarm notification via MQTT
           String alarmMsg = "Alarm triggered at " + matchedAlarm;
           mqtt.publish("smartalarm/alarm/triggered", alarmMsg);
@@ -275,7 +286,8 @@ void alarmTask(void* parameter) {
       if (alarmQuestion.shouldDeactivateAlarm() && audio.playing()) {
         Serial.println("[Alarm] Question answered correctly - Stopping alarm");
         audio.stop();
-        mqtt.publish("smartalarm/alarm/deactivated", "Question answered correctly");
+        mqtt.publish("smartalarm/alarm/deactivated",
+                     "Question answered correctly");
         alarmQuestion.reset();
       }
     }

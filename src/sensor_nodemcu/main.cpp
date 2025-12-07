@@ -32,7 +32,7 @@ const char* SOFT_AP_PASSWORD = "12345678";
 uint8_t gatewayAddress[] = {0x28, 0x56, 0x2F, 0x4A, 0x15, 0x0D};
 
 #define WIFI_CHANNEL 6
-#define SENSOR_READ_INTERVAL 5000  // 5 seconds
+#define SENSOR_READ_INTERVAL 10000  // 10 seconds
 
 // ============================================================================
 // Global Variables

@@ -52,7 +52,12 @@ static const char* MQTT_TOPIC_AUDIO_STATUS =
 // ALARM QUESTION TOPICS (LLM/STT Integration)
 // ============================================================================
 static const char* MQTT_TOPIC_QUESTION =
-    "smartalarm/question";  // server -> gateway (trivia question)
+    "smartalarm/question";  // server -> gateway (single trivia question)
+static const char* MQTT_TOPIC_QUESTION_REQUEST =
+    "smartalarm/question/request";  // gateway -> server (request N questions)
+static const char* MQTT_TOPIC_QUESTION_BATCH =
+    "smartalarm/question/batch";  // server -> gateway (multiple questions,
+                                  // newline-separated)
 static const char* MQTT_TOPIC_QUESTION_STATUS =
     "smartalarm/question/status";  // gateway -> server (received)
 static const char* MQTT_TOPIC_ANSWER_AUDIO =

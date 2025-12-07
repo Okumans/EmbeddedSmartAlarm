@@ -15,6 +15,7 @@
 #include "../../include/gateway_esp32/display_manager.h"
 #include "../../include/gateway_esp32/mqtt_manager.h"
 #include "../../include/gateway_esp32/mqtt_setup.h"
+#include "../../include/gateway_esp32/question_manager.h"
 #include "../../include/gateway_esp32/rtos_tasks.h"
 #include "../../include/gateway_esp32/sd_manager.h"
 #include "../../include/gateway_esp32/sensor_manager.h"
@@ -63,6 +64,7 @@ MQTTManager mqtt;
 AudioManager audio;
 SDManager sdManager;
 DisplayManager displayManager;
+QuestionManager questionManager;
 
 // ============================================================================
 // Global Variables
@@ -123,6 +125,14 @@ void setup() {
 
   // Register audio MQTT handlers (must be after setupMQTT)
   audio.registerMQTTHandlers(mqtt);
+
+  // Initialize and register question manager MQTT handlers
+  if (questionManager.begin()) {
+    Serial.println("[System] Question Manager initialized");
+    questionManager.registerMQTTHandlers(mqtt);
+  } else {
+    Serial.println("[System] Question Manager initialization failed");
+  }
 
   // Setup ESP-NOW (after WiFi for channel sync)
   setupESPNow();

@@ -90,9 +90,13 @@ def send(topic, message):
 
         client.connect(BROKER, PORT, 60)
         client.loop_start()
-        client.publish(topic, message)
-        # Give the client a short time to send
-        time.sleep(0.2)
+        
+        # Publish with QoS 1 for reliable delivery
+        result = client.publish(topic, message, qos=1)
+        
+        # Wait for the message to be sent
+        result.wait_for_publish(timeout=2.0)
+        
         client.loop_stop()
         client.disconnect()
         print(f"✓ Sent: [{topic}] {message}")

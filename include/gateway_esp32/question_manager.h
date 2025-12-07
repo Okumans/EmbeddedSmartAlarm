@@ -99,6 +99,8 @@ class QuestionManager {
       const String& question);  // Called by MQTT handler (single)
   void receiveQuestionBatch(
       const String& batch);  // Called by MQTT handler (batch)
+  // Remove a question from the cache (returns true if removed)
+  bool removeQuestion(const String& question);
 
   // ============================================================================
   // MQTT Integration

@@ -371,6 +371,12 @@ void alarmTask(void* parameter) {
 
           vTaskDelay(pdMS_TO_TICKS(3000));  // Show for 3 seconds
           displayManager.returnToNormalDisplay();
+          // Remove question from cache since it was answered correctly
+          extern QuestionManager questionManager;
+          String q = alarmQuestion.getQuestion();
+          if (q.length() > 0) {
+            questionManager.removeQuestion(q);
+          }
           alarmQuestion.reset();
         }
 

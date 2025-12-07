@@ -257,6 +257,27 @@ void QuestionManager::receiveQuestionBatch(const String& batch) {
   printStatus();
 }
 
+bool QuestionManager::removeQuestion(const String& question) {
+  for (int i = 0; i < questionCount; i++) {
+    if (questionCache[i] == question) {
+      // Shift remaining questions down
+      for (int j = i; j < questionCount - 1; j++) {
+        questionCache[j] = questionCache[j + 1];
+      }
+      questionCache[questionCount - 1] = String();
+      questionCount--;
+      Serial.printf("[QuestionManager] Removed question from cache: %s\n",
+                    question.c_str());
+      // Persist change
+      saveQuestionsToFile();
+      return true;
+    }
+  }
+  Serial.printf("[QuestionManager] Question to remove not found: %s\n",
+                question.c_str());
+  return false;
+}
+
 // ============================================================================
 // MQTT Integration
 // ============================================================================

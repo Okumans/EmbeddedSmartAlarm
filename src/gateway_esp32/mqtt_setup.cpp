@@ -3,20 +3,22 @@
 #include <PubSubClient.h>
 #include <WiFi.h>
 
-#include "../../include/gateway_esp32/audio_manager.h"
-#include "../../include/gateway_esp32/mqtt_manager.h"
-#include "../../include/shared/config.h"
-#include "../../include/shared/sensor_data.h"
-#include "../../include/shared/mqtt_time.h"
-#include "../../include/shared/time_sync.h"
 #include "../../include/gateway_esp32/alarm_manager.h"
 #include "../../include/gateway_esp32/alarm_question_handler.h"
+#include "../../include/gateway_esp32/audio_manager.h"
+#include "../../include/gateway_esp32/audio_stream_manager.h"
+#include "../../include/gateway_esp32/mqtt_manager.h"
+#include "../../include/shared/config.h"
+#include "../../include/shared/mqtt_time.h"
+#include "../../include/shared/sensor_data.h"
+#include "../../include/shared/time_sync.h"
 
 // External declarations
 extern WiFiClient wifiClient;
 extern PubSubClient mqttClient;
 extern MQTTManager mqtt;
 extern AudioManager audio;
+extern AudioStreamManager audioStream;
 extern SensorData remoteSensorData;
 extern bool remoteSensorDataAvailable;
 
@@ -40,10 +42,12 @@ void setupMQTT() {
     if (mqtt.reconnect()) {
       Serial.println("[MQTT] Immediate connection successful");
     } else {
-      Serial.println("[MQTT] Immediate connection failed (will retry in task loop)");
+      Serial.println(
+          "[MQTT] Immediate connection failed (will retry in task loop)");
     }
   } else {
-    Serial.println("[MQTT] WiFi not connected; skipping immediate MQTT connect");
+    Serial.println(
+        "[MQTT] WiFi not connected; skipping immediate MQTT connect");
   }
 
   setupMQTTHandlers();
@@ -84,8 +88,7 @@ void setupMQTTHandlers() {
         String message((char*)payload, length);
         message.toLowerCase();
 
-        Serial.printf("[MQTT] Received system command: %s\n",
-                      message.c_str());
+        Serial.printf("[MQTT] Received system command: %s\n", message.c_str());
 
         if (message == "stop_audio") {
           audio.stop();
@@ -112,6 +115,12 @@ void setupMQTTHandlers() {
           }
           bool success = audio.playFile(filename.c_str());
           mqtt.publish("smartalarm/status", success ? "playing" : "error");
+          return true;
+        } else if (message == "start_recording") {
+          audioStream.startRecording();
+          return true;
+        } else if (message == "stop_recording") {
+          audioStream.stopRecording();
           return true;
         } else if (message == "status") {
           String status = "online|audio:";
@@ -181,7 +190,8 @@ void setupMQTTHandlers() {
         mqtt.publish("smartalarm/alarmlist/status", "ok");
         mqtt.publish("smartalarm/alarmlist/parsed", alarmManager.toCSV());
 
-        Serial.printf("[MQTT] Alarms updated: %s\n", alarmManager.toCSV().c_str());
+        Serial.printf("[MQTT] Alarms updated: %s\n",
+                      alarmManager.toCSV().c_str());
         return true;
       },
       "AlarmList", 100);
@@ -197,19 +207,19 @@ void setupMQTTHandlers() {
          unsigned int length) -> bool {
         String soundFile((char*)payload, length);
         soundFile.trim();
-        
+
         // Ensure leading slash
         if (!soundFile.startsWith("/")) {
           soundFile = "/" + soundFile;
         }
-        
+
         // Update alarm sound
         alarmManager.setAlarmSound(soundFile);
-        
+
         // Acknowledge
         mqtt.publish("smartalarm/alarm/sound/status", "ok");
         mqtt.publish("smartalarm/alarm/sound/current", soundFile);
-        
+
         Serial.printf("[MQTT] Alarm sound updated to: %s\n", soundFile.c_str());
         return true;
       },
@@ -226,7 +236,7 @@ void setupMQTTHandlers() {
          unsigned int length) -> bool {
         String question((char*)payload, length);
         alarmQuestion.setQuestion(question);
-        
+
         mqtt.publish("smartalarm/question/status", "received");
         Serial.printf("[MQTT] Question received: %s\n", question.c_str());
         return true;
@@ -244,12 +254,13 @@ void setupMQTTHandlers() {
          unsigned int length) -> bool {
         String result((char*)payload, length);
         result.toLowerCase();
-        
-        bool isCorrect = result.indexOf("valid") >= 0 && result.indexOf("invalid") < 0;
+
+        bool isCorrect =
+            result.indexOf("valid") >= 0 && result.indexOf("invalid") < 0;
         alarmQuestion.setValidationResult(isCorrect);
-        
-        Serial.printf("[MQTT] Answer validation: %s (%s)\n",
-                      result.c_str(), isCorrect ? "CORRECT" : "WRONG");
+
+        Serial.printf("[MQTT] Answer validation: %s (%s)\n", result.c_str(),
+                      isCorrect ? "CORRECT" : "WRONG");
         return true;
       },
       "AnswerValidation", 100);

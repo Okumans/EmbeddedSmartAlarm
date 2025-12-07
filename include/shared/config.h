@@ -26,7 +26,13 @@ static const char* MQTT_SERVER = "broker.hivemq.com";
 static const int MQTT_PORT = 1883;
 static const char* MQTT_CLIENT_ID = "SmartAlarmClock";
 
+// Audio streaming configuration
+static const char* AUDIO_SERVER_IP =
+    "172.20.10.3";  // Python server IP (update to your computer's IP)
+static const int AUDIO_SERVER_PORT = 4000;
+
 // Alarm configuration
-static const char* DEFAULT_ALARM_SOUND = "/alarm.mp3";  // Default alarm sound file on SD card
+static const char* DEFAULT_ALARM_SOUND =
+    "/alarm.mp3";  // Default alarm sound file on SD card
 
 #endif  // SMARTALARM_CONFIG_H

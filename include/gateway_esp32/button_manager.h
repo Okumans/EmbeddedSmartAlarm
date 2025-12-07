@@ -22,6 +22,9 @@ class ButtonManager {
   // Call this in loop() - returns detected gesture
   ButtonGesture update();
 
+  // Check if button is currently pressed
+  bool isPressed() const { return stablePressed; }
+
   // Configuration
   void setDebounceTime(unsigned long ms) { debounceTime = ms; }
   void setDoubleClickTime(unsigned long ms) { doubleClickTime = ms; }
@@ -33,9 +36,9 @@ class ButtonManager {
   bool activeHigh;
 
   // Timing configuration
-  unsigned long debounceTime = 30;     // ms
-  unsigned long doubleClickTime = 350; // ms
-  unsigned long longPressTime = 800;   // ms
+  unsigned long debounceTime = 30;      // ms
+  unsigned long doubleClickTime = 350;  // ms
+  unsigned long longPressTime = 800;    // ms
 
   // Debounce state
   int lastRaw = HIGH;

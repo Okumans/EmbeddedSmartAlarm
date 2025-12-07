@@ -5,6 +5,8 @@
 #include "../../include/gateway_esp32/alarm_manager.h"
 #include "../../include/gateway_esp32/alarm_question_handler.h"
 #include "../../include/gateway_esp32/audio_manager.h"
+#include "../../include/gateway_esp32/audio_stream_manager.h"
+#include "../../include/gateway_esp32/button_manager.h"
 #include "../../include/gateway_esp32/display_manager.h"
 #include "../../include/gateway_esp32/mqtt_manager.h"
 #include "../../include/gateway_esp32/question_manager.h"
@@ -16,6 +18,8 @@
 
 // External references to global objects (from main.cpp)
 extern AudioManager audio;
+extern AudioStreamManager audioStream;
+extern ButtonManager button;
 extern MQTTManager mqtt;
 extern SensorManager localSensors;
 extern DisplayManager displayManager;
@@ -58,8 +62,11 @@ void audioDecodeTask(void* parameter) {
 void audioEncodeTask(void* parameter) {
   Serial.println("[RTOS] Audio Encode Task started on Core 1");
 
-  // Reserved for future INMP441 Microphone implementation
-  vTaskDelete(NULL);
+  for (;;) {
+    // Process audio streaming (I2S read + WebSocket send)
+    audioStream.process();
+    vTaskDelay(pdMS_TO_TICKS(10));  // 10ms loop for smooth audio streaming
+  }
 }
 
 // ============================================================================
@@ -290,10 +297,47 @@ void alarmTask(void* parameter) {
                      "Question answered correctly");
         alarmQuestion.reset();
       }
+
+      // Handle button for recording (works anytime)
+      // Press to start, release to stop
+      static bool wasPressed = false;
+      bool isPressed = button.isPressed();
+
+      // Debug output
+      static int debugCounter = 0;
+      if (debugCounter++ % 10 == 0) {
+        Serial.printf("[Button] isPressed: %d, wasPressed: %d\n", isPressed,
+                      wasPressed);
+      }
+
+      if (isPressed && !wasPressed) {
+        // Button just pressed - start recording
+        Serial.println("[Button] Pressed - Starting recording");
+
+        // Turn on LED
+        digitalWrite(2, HIGH);  // LED_PIN = 2
+
+        // Start recording
+        audioStream.startRecording();
+        wasPressed = true;
+      } else if (!isPressed && wasPressed) {
+        // Button just released - stop recording
+        Serial.println("[Button] Released - Stopping recording");
+
+        // Turn off LED
+        digitalWrite(2, LOW);
+
+        // Stop recording
+        audioStream.stopRecording();
+        wasPressed = false;
+      }
+
+      // Still need to call update for gesture processing
+      button.update();
     }
 
-    // Check every second
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    // Check every 100ms for responsive button handling
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 

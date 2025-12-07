@@ -3,6 +3,9 @@
 # MQTT Communication
 paho-mqtt>=1.6.1
 
+# WebSocket for audio streaming
+websockets>=12.0
+
 # Google Gemini AI
 google-generativeai>=0.3.0
 

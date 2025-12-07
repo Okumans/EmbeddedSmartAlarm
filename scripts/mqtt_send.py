@@ -1,4 +1,10 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
+# /// script
+# dependencies = [
+#   "paho-mqtt",
+# ]
+# ///
+
 """
 Quick MQTT Audio Test
 Send quick commands to test audio playback
@@ -197,6 +203,7 @@ if __name__ == "__main__":
         print("  python3 mqtt_send.py list                  - List files")
         print("  python3 mqtt_send.py alarms                - Get current alarms")
         print("  python3 mqtt_send.py setalarms HH:MM ...   - Set alarm times")
+        print("  python3 mqtt_send.py <topic> <message>     - Send to custom topic")
         print("\nExamples:")
         print("  python3 mqtt_send.py play /alarm1.mp3")
         print("  python3 mqtt_send.py stop")
@@ -204,6 +211,7 @@ if __name__ == "__main__":
         print("  python3 mqtt_send.py list")
         print("  python3 mqtt_send.py alarms")
         print("  python3 mqtt_send.py setalarms 07:30 08:00 14:30")
+        print("  python3 mqtt_send.py smartalarm/commands start_recording")
         sys.exit(1)
     
     cmd = sys.argv[1].lower()
@@ -250,4 +258,12 @@ if __name__ == "__main__":
             print("✗ No valid alarm times provided")
         
     else:
-        print(f"Unknown command: {cmd}")
+        # Generic topic/message sender
+        # Usage: mqtt_send.py <topic> <message>
+        if len(sys.argv) >= 3:
+            topic = sys.argv[1]
+            message = sys.argv[2]
+            send(topic, message)
+        else:
+            print(f"Unknown command: {cmd}")
+            print("For custom topics, use: mqtt_send.py <topic> <message>")

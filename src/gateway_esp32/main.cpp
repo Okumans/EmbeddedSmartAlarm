@@ -12,6 +12,8 @@
 #include <soc/soc.h>
 
 #include "../../include/gateway_esp32/audio_manager.h"
+#include "../../include/gateway_esp32/audio_stream_manager.h"
+#include "../../include/gateway_esp32/button_manager.h"
 #include "../../include/gateway_esp32/display_manager.h"
 #include "../../include/gateway_esp32/mqtt_manager.h"
 #include "../../include/gateway_esp32/mqtt_setup.h"
@@ -31,8 +33,8 @@
 #include "../../include/shared/mqtt_topic_config.h"
 
 // Pin Definitions
-#define DHTPIN 4
-#define DHTTYPE DHT22
+#define BUTTON_PIN 4  // Button for recording trigger
+#define LED_PIN 2     // LED indicator for recording (built-in LED)
 #define I2S_DOUT 27
 #define I2S_BCLK 26
 #define I2S_LRC 25
@@ -62,6 +64,8 @@ WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 MQTTManager mqtt;
 AudioManager audio;
+AudioStreamManager audioStream;
+ButtonManager button(BUTTON_PIN, true);  // Active HIGH (button pressed = HIGH)
 SDManager sdManager;
 DisplayManager displayManager;
 QuestionManager questionManager;
@@ -112,6 +116,18 @@ void setup() {
   audio.begin();
   audio.setSDManager(&sdManager);
   audio.setMQTTManager(&mqtt);
+
+  // Initialize audio streaming
+  audioStream.begin(AUDIO_SERVER_IP, AUDIO_SERVER_PORT);
+
+  // Initialize button
+  button.begin();
+  Serial.println("[System] Button initialized on pin " + String(BUTTON_PIN));
+
+  // Initialize LED
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  Serial.println("[System] LED initialized on pin " + String(LED_PIN));
 
   // Set display manager dependencies
   displayManager.setSensorManager(&localSensors);

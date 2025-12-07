@@ -3,6 +3,7 @@
 #include <Adafruit_Sensor.h>
 #include <Arduino.h>
 #include <DHT.h>
+#include <SPIFFS.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
 #include <Wire.h>
@@ -13,6 +14,7 @@
 
 #include "../../include/gateway_esp32/audio_manager.h"
 #include "../../include/gateway_esp32/audio_stream_manager.h"
+#include "../../include/gateway_esp32/alarm_manager.h"
 #include "../../include/gateway_esp32/button_manager.h"
 #include "../../include/gateway_esp32/display_manager.h"
 #include "../../include/gateway_esp32/mqtt_manager.h"
@@ -95,6 +97,7 @@ void setup() {
   Serial.println("Smart Alarm Clock - Starting");
   Serial.println("========================================\n");
 
+
   // Initialize I2C
   Wire.begin(SDA_PIN, SCL_PIN);
 
@@ -108,8 +111,31 @@ void setup() {
   displayManager.showStartup();
 
   // Initialize SD card first
+  Serial.println("[System] ========================================");
+  Serial.println("[System] Initializing SD Card...");
+  Serial.println("[System] ========================================");
   if (!sdManager.begin(5)) {
-    Serial.println("[System] SD Manager initialization failed!");
+    Serial.println("[System] ❌ SD Manager initialization FAILED!");
+    Serial.println("[System] Audio downloads will NOT work");
+    Serial.println("[System] Check SD card connection:");
+    Serial.println("[System]   CS: Pin 5");
+    Serial.println("[System]   MOSI: Pin 23");
+    Serial.println("[System]   MISO: Pin 19");
+    Serial.println("[System]   CLK: Pin 18");
+  } else {
+    Serial.println("[System] ✓ SD Card initialized successfully");
+  }
+  Serial.println("[System] ========================================");
+
+  // Initialize SPIFFS (internal filesystem for question storage)
+  Serial.println("[System] Initializing SPIFFS...");
+  if (!SPIFFS.begin(true)) {  // true = format if mount fails
+    Serial.println("[System] ❌ SPIFFS Mount Failed!");
+    Serial.println("[System] Question storage will NOT work");
+  } else {
+    Serial.println("[System] ✓ SPIFFS mounted successfully");
+    Serial.printf("[System] Total: %d bytes, Used: %d bytes\n", 
+                  SPIFFS.totalBytes(), SPIFFS.usedBytes());
   }
 
   // Initialize audio system
@@ -149,6 +175,9 @@ void setup() {
   } else {
     Serial.println("[System] Question Manager initialization failed");
   }
+
+  // Initialize alarm manager (loads persistent alarm sound)
+  alarmManager.begin();
 
   // Setup ESP-NOW (after WiFi for channel sync)
   setupESPNow();

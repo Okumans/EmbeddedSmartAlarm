@@ -6,6 +6,7 @@ AlarmQuestionHandler::AlarmQuestionHandler()
     : state(QUESTION_IDLE),
       currentAttempt(0),
       recordingStartTime(0),
+      lastActivityTime(0),
       recordingActive(false) {}
 
 void AlarmQuestionHandler::setQuestion(const String& question) {
@@ -17,6 +18,7 @@ void AlarmQuestionHandler::startQuestionSession() {
   state = QUESTION_DISPLAYING;
   currentAttempt = 1;
   recordingActive = false;
+  lastActivityTime = millis();
   
   Serial.println("[AlarmQuestion] Question session started");
   Serial.printf("[AlarmQuestion] Question: %s\n", currentQuestion.c_str());
@@ -27,6 +29,7 @@ void AlarmQuestionHandler::startRecording() {
   if (state == QUESTION_DISPLAYING || state == QUESTION_WRONG) {
     state = QUESTION_RECORDING;
     recordingStartTime = millis();
+    lastActivityTime = millis();
     recordingActive = true;
     
     Serial.printf("[AlarmQuestion] Recording started (Attempt %d/%d)\n",
@@ -100,4 +103,17 @@ String AlarmQuestionHandler::getStatusMessage() const {
     default:
       return "Unknown";
   }
+}
+
+bool AlarmQuestionHandler::shouldTimeout() const {
+  if (state == QUESTION_IDLE || state == QUESTION_CORRECT || state == QUESTION_FAILED) {
+    return false;
+  }
+  
+  // Timeout if no activity for 50 seconds
+  return (millis() - lastActivityTime) > timeoutMs;
+}
+
+void AlarmQuestionHandler::updateActivity() {
+  lastActivityTime = millis();
 }

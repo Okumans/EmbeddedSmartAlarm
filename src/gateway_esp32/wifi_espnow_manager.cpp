@@ -174,9 +174,50 @@ void setupESPNow() {
 }
 
 void maintainWiFi() {
-  // WiFi reconnection check
+  static unsigned long lastReconnectAttempt = 0;
+  static int reconnectAttempts = 0;
+  
+  // WiFi reconnection check (with rate limiting)
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFi] Connection lost, reconnecting...");
-    setupWiFi();
+    unsigned long now = millis();
+    
+    // Rate limit reconnection attempts (wait 5 seconds between attempts)
+    if (now - lastReconnectAttempt < 5000) {
+      return;
+    }
+    
+    lastReconnectAttempt = now;
+    reconnectAttempts++;
+    
+    Serial.printf("[WiFi] Connection lost (attempt %d), reconnecting...\n", reconnectAttempts);
+    
+    // Try simple reconnect first (faster, less disruptive)
+    if (reconnectAttempts < 3) {
+      WiFi.disconnect(false, false);  // Don't erase credentials
+      delay(100);
+      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+      
+      // Wait up to 10 seconds for connection
+      int timeout = 0;
+      while (WiFi.status() != WL_CONNECTED && timeout < 20) {
+        delay(500);
+        Serial.print(".");
+        timeout++;
+      }
+      
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\n[WiFi] ✓ Reconnected successfully");
+        reconnectAttempts = 0;  // Reset counter on success
+      } else {
+        Serial.println("\n[WiFi] ✗ Quick reconnect failed");
+      }
+    } else {
+      // After 3 failed attempts, do full WiFi setup (recreate AP, etc.)
+      Serial.println("[WiFi] Multiple reconnect failures, doing full reset...");
+      setupWiFi();
+      reconnectAttempts = 0;  // Reset after full setup
+    }
+  } else {
+    reconnectAttempts = 0;  // Reset counter when connected
   }
 }

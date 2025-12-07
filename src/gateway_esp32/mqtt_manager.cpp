@@ -255,6 +255,12 @@ bool MQTTManager::reconnect() {
     return true;  // Already connected
   }
 
+  // Ensure WiFi is connected before attempting MQTT connection
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[MQTTManager] WiFi not connected, skipping MQTT reconnect");
+    return false;
+  }
+
   Serial.print("[MQTTManager] Attempting connection");
   if (clientId.length() > 0) {
     Serial.printf(" (Client ID: %s)", clientId.c_str());
@@ -302,6 +308,11 @@ bool MQTTManager::reconnect() {
 
 void MQTTManager::loop() {
   if (!client) {
+    return;
+  }
+
+  // Skip MQTT operations if WiFi is not connected
+  if (WiFi.status() != WL_CONNECTED) {
     return;
   }
 

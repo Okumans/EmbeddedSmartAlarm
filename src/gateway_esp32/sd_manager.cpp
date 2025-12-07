@@ -20,9 +20,9 @@ bool SDManager::begin(int maxRetries) {
     Serial.printf("[SD] Mount attempt %d/%d at 4MHz...\n", attempt + 1,
                   maxRetries);
 
-    if (SD.begin(SD_CS_PIN, SPI, 4000000)) {
+    if (SD.begin(SD_CS_PIN, SPI, 1000000)) {
       _ready = true;
-      Serial.println("[SD] Mount Success at 4MHz!");
+      Serial.println("[SD] Mount Success at 1MHz!");
       return true;
     }
 

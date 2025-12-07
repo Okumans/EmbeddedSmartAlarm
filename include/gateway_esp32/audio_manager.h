@@ -37,6 +37,7 @@ class AudioManager {
   AudioGeneratorMP3* mp3;
 
   bool initialized;
+  bool i2sInitialized;  // NEW: Track I2S hardware state
   bool isPlaying;
   float currentVolume;
 
@@ -55,6 +56,9 @@ class AudioManager {
   bool downloadingInProgress;
 
   void cleanup();
+
+  // Internal: Initialize I2S hardware (lazy init)
+  bool ensureI2SInitialized();
 
   // Internal handler for audio chunks
   bool handleAudioRequest(MQTTManager& mqtt, byte* payload,

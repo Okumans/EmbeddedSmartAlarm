@@ -55,12 +55,12 @@ bool QuestionManager::begin() {
 // File Operations
 // ============================================================================
 bool QuestionManager::loadQuestionsFromFile() {
-  if (!LittleFS.exists(QUESTIONS_FILE)) {
+  if (!SPIFFS.exists(QUESTIONS_FILE)) {
     Serial.println("[QuestionManager] Questions file not found");
     return false;
   }
 
-  File file = LittleFS.open(QUESTIONS_FILE, "r");
+  File file = SPIFFS.open(QUESTIONS_FILE, "r");
   if (!file) {
     Serial.println("[QuestionManager] ✗ Failed to open questions file");
     return false;
@@ -82,12 +82,25 @@ bool QuestionManager::loadQuestionsFromFile() {
 }
 
 bool QuestionManager::saveQuestionsToFile() {
-  File file = LittleFS.open(QUESTIONS_FILE, "w");
-  if (!file) {
-    Serial.println("[QuestionManager] ✗ Failed to save questions file");
+  // Check if SPIFFS is mounted
+  if (!SPIFFS.begin()) {
+    Serial.println("[QuestionManager] ✗ SPIFFS not mounted, cannot save");
     return false;
   }
 
+  // Open file with FILE_WRITE mode (creates if doesn't exist)
+  File file = SPIFFS.open(QUESTIONS_FILE, FILE_WRITE);
+  if (!file) {
+    Serial.printf("[QuestionManager] ✗ Failed to open %s for writing\n", QUESTIONS_FILE);
+    Serial.printf("[QuestionManager] SPIFFS total: %d, used: %d\n", 
+                  SPIFFS.totalBytes(), SPIFFS.usedBytes());
+    return false;
+  }
+
+  // Clear existing content by truncating
+  file.seek(0);
+  
+  // Write questions
   for (int i = 0; i < questionCount; i++) {
     file.println(questionCache[i]);
   }

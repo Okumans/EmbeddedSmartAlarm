@@ -8,6 +8,9 @@ class AlarmManager {
  public:
   AlarmManager();
 
+  // Initialize and load persistent settings from LittleFS
+  void begin();
+
   // Parse a payload like "07:30,08:00,14:30" and store HH:MM entries
   void setFromPayload(const char* payload, unsigned int length);
 
@@ -35,6 +38,9 @@ class AlarmManager {
   String getAlarmSound() const;
 
  private:
+  // File operations
+  bool loadAlarmSoundFromFile();
+  bool saveAlarmSoundToFile();
   std::vector<String> alarms;
   std::vector<String> triggeredAlarms;  // Track which alarms have been triggered
   String alarmSoundFile;  // Custom alarm sound file path

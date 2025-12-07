@@ -14,6 +14,8 @@ DisplayManager::DisplayManager()
     : display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1),
       tcaMultiplexer(nullptr),
       currentPage(PAGE_SENSORS),
+      showingAlarmQuestion(false),
+      lastAttempt(-1),
       sensorManager(nullptr),
       sdManager(nullptr),
       audioManager(nullptr),
@@ -46,6 +48,13 @@ void DisplayManager::update() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
+
+  // Skip normal pages if showing alarm question
+  if (showingAlarmQuestion) {
+    display.display();
+    tcaMultiplexer->closeChannel(TCA_CHANNEL_OLED);
+    return;
+  }
 
   switch (currentPage) {
     case PAGE_SENSORS:
@@ -241,4 +250,72 @@ void DisplayManager::drawPageAudio() {
   } else {
     display.println("Audio: --");
   }
+}
+
+void DisplayManager::showAlarmQuestion(const String& question, int attempt, int maxAttempts, const String& status) {
+  if (!tcaMultiplexer) return;
+
+  // Only redraw if something changed
+  if (showingAlarmQuestion && 
+      lastQuestionText == question && 
+      lastAttempt == attempt && 
+      lastStatus == status) {
+    return;  // No change, skip redraw
+  }
+
+  // Update cache
+  showingAlarmQuestion = true;
+  lastQuestionText = question;
+  lastAttempt = attempt;
+  lastStatus = status;
+  
+  tcaMultiplexer->openChannel(TCA_CHANNEL_OLED);
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  
+  // Title
+  display.setCursor(0, 0);
+  display.setTextSize(1);
+  display.println("ALARM QUESTION");
+  display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
+  
+  // Question (wrap text at ~21 chars per line)
+  display.setCursor(0, 14);
+  display.setTextSize(1);
+  
+  // Simple text wrapping
+  int lineY = 14;
+  int charCount = 0;
+  for (int i = 0; i < question.length(); i++) {
+    if (charCount >= 21 || question[i] == '\n') {
+      lineY += 10;
+      charCount = 0;
+      display.setCursor(0, lineY);
+    }
+    if (lineY < 45) {  // Don't overflow into bottom area
+      display.print(question[i]);
+      charCount++;
+    }
+  }
+  
+  // Status line
+  display.setCursor(0, 48);
+  display.setTextSize(1);
+  display.println(status);
+  
+  // Attempt counter
+  display.setCursor(0, 56);
+  display.printf("Attempt: %d/%d", attempt, maxAttempts);
+  
+  display.display();
+  tcaMultiplexer->closeChannel(TCA_CHANNEL_OLED);
+}
+
+void DisplayManager::returnToNormalDisplay() {
+  showingAlarmQuestion = false;
+  lastQuestionText = "";
+  lastAttempt = -1;
+  lastStatus = "";
+  currentPage = PAGE_SENSORS;  // Reset to first page
 }

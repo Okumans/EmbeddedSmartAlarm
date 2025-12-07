@@ -69,15 +69,28 @@ bool AudioManager::begin() {
     return true;
   }
 
+  // Don't initialize I2S yet - wait until playback needed
+  Serial.println("[Audio] Audio manager initialized (I2S deferred)");
+  
+  initialized = true;
+  i2sInitialized = false;
+  return true;
+}
+
+bool AudioManager::ensureI2SInitialized() {
+  if (i2sInitialized) {
+    return true;
+  }
+
+  Serial.println("[Audio] Initializing I2S hardware...");
+  
   // Initialize I2S output
-  Serial.println("[Audio] Initializing I2S output...");
   out = new AudioOutputI2S();
   out->SetPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
   out->SetGain(currentVolume);
 
-  initialized = true;
-  Serial.println("[Audio] Audio system initialized");
-
+  i2sInitialized = true;
+  Serial.println("[Audio] I2S hardware initialized");
   return true;
 }
 
@@ -100,6 +113,13 @@ bool AudioManager::playFile(const char* filename) {
 
   if (!initialized) {
     Serial.println("[Audio] Not initialized!");
+    xSemaphoreGiveRecursive(audioMutex);  // UNLOCK
+    return false;
+  }
+
+  // Initialize I2S if not already done
+  if (!ensureI2SInitialized()) {
+    Serial.println("[Audio] Failed to initialize I2S!");
     xSemaphoreGiveRecursive(audioMutex);  // UNLOCK
     return false;
   }
@@ -381,19 +401,37 @@ bool AudioManager::downloadFile(const char* url, const char* filename) {
     return false;
   }
 
+  Serial.printf("[Audio] Connecting to: %s\n", url);
+  Serial.printf("[Audio] ESP32 IP: %s\n", WiFi.localIP().toString().c_str());
+
   HTTPClient http;
 
-  // 1. INCREASE TIMEOUT (Add this line)
-  http.setTimeout(10000);  // Set timeout to 10 seconds (default is usually 5s)
+  // Increase timeout for slow connections
+  http.setTimeout(15000);  // 15 seconds
 
-  http.begin(url);
+  if (!http.begin(url)) {
+    Serial.println("[Audio] ERROR: Failed to begin HTTP connection");
+    return false;
+  }
+
+  Serial.println("[Audio] Sending HTTP GET request...");
   int httpCode = http.GET();
 
   if (httpCode != HTTP_CODE_OK) {
     Serial.printf("[Audio] HTTP GET failed, code: %d\n", httpCode);
+    if (httpCode == -1) {
+      Serial.println("[Audio] Error -1 means: Connection failed");
+      Serial.println("[Audio] Possible causes:");
+      Serial.println("[Audio]   - Server not running");
+      Serial.println("[Audio]   - Wrong IP address");
+      Serial.println("[Audio]   - Firewall blocking port");
+      Serial.println("[Audio]   - ESP32 and server on different networks");
+    }
     http.end();
     return false;
   }
+
+  Serial.printf("[Audio] HTTP OK! Content length: %d bytes\n", http.getSize());
 
   // Open file for writing
   if (!sdManager->openForWrite(filename)) {

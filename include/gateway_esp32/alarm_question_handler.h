@@ -33,6 +33,12 @@ class AlarmQuestionHandler {
   // Get max attempts
   int getMaxAttempts() const { return maxAttempts; }
 
+  // Check if should timeout (50s without button press)
+  bool shouldTimeout() const;
+
+  // Update last activity time (called when button is pressed)
+  void updateActivity();
+
   // Start question session (called when alarm triggers)
   void startQuestionSession();
 
@@ -61,8 +67,10 @@ class AlarmQuestionHandler {
   String currentQuestion;
   AlarmQuestionState state;
   int currentAttempt;
-  const int maxAttempts = 3;
+  const int maxAttempts = 20;
+  const unsigned long timeoutMs = 50000;  // 50 seconds
   unsigned long recordingStartTime;
+  unsigned long lastActivityTime;
   bool recordingActive;
 };
 

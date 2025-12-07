@@ -18,7 +18,7 @@ class AudioManager;
 #define TCA_CHANNEL_OLED 1
 
 // Enum for display pages
-enum DisplayPage { PAGE_SENSORS, PAGE_NETWORK, PAGE_STATUS, PAGE_AUDIO };
+enum DisplayPage { PAGE_SENSORS, PAGE_NETWORK, PAGE_STATUS, PAGE_AUDIO, PAGE_ALARM_QUESTION };
 
 class DisplayManager {
  public:
@@ -42,11 +42,23 @@ class DisplayManager {
   // Startup screen
   void showStartup();
 
+  // Alarm question display (override current page)
+  void showAlarmQuestion(const String& question, int attempt, int maxAttempts, const String& status);
+
+  // Return to normal page cycle
+  void returnToNormalDisplay();
+
  private:
   Adafruit_SSD1306 display;
   TCA9548A* tcaMultiplexer;
 
   DisplayPage currentPage;
+  bool showingAlarmQuestion;
+  
+  // Cache alarm question state to prevent unnecessary redraws
+  String lastQuestionText;
+  int lastAttempt;
+  String lastStatus;
 
   // Injected dependencies
   SensorManager* sensorManager;

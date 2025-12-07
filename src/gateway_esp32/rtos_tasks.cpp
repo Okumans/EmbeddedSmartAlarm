@@ -256,84 +256,159 @@ void alarmTask(void* parameter) {
 
       // Check if any alarm matches current time
       String matchedAlarm = alarmManager.checkAlarms(currentTime);
-      if (matchedAlarm.length() > 0) {
+      if (matchedAlarm.length() > 0 && !alarmQuestion.isActive()) {
         // Alarm triggered!
         Serial.printf("⏰ ALARM TRIGGERED: %s\n", matchedAlarm.c_str());
 
         // Mark this alarm as triggered to prevent re-triggering
         alarmManager.setAlarmTriggered(matchedAlarm, true);
 
-        // Get question from QuestionManager
+        // Request question if not already available
         String question = questionManager.getQuestionForAlarm();
+        if (question.length() == 0) {
+          Serial.println("[Alarm] Requesting question from server...");
+          mqtt.publish("smartalarm/question/request", "");
+          // Wait briefly for question
+          vTaskDelay(pdMS_TO_TICKS(500));
+          question = questionManager.getQuestionForAlarm();
+        }
+        
         if (question.length() > 0) {
           alarmQuestion.setQuestion(question);
           Serial.println("[Alarm] Starting question challenge mode");
           alarmQuestion.startQuestionSession();
+          
+          // Show question on OLED
+          displayManager.showAlarmQuestion(
+            question,
+            alarmQuestion.getCurrentAttempt(),
+            alarmQuestion.getMaxAttempts(),
+            "Press button to answer"
+          );
         } else {
-          Serial.println(
-              "[Alarm] No question available, alarm will play without "
-              "challenge");
+          Serial.println("[Alarm] No question available, alarm will play without challenge");
         }
 
-        // Play alarm sound (use custom sound if set, otherwise default)
+        // Play alarm sound at 100% volume
+        audio.setVolume(1.0);
         String soundFile = alarmManager.getAlarmSound();
         if (audio.playFile(soundFile.c_str())) {
           Serial.printf("[Alarm] Playing alarm sound: %s\n", soundFile.c_str());
-
-          // Publish alarm notification via MQTT
-          String alarmMsg = "Alarm triggered at " + matchedAlarm;
-          mqtt.publish("smartalarm/alarm/triggered", alarmMsg);
+          mqtt.publish("smartalarm/alarm/triggered", "Alarm triggered at " + matchedAlarm);
         } else {
           Serial.println("[Alarm] ERROR: Failed to play alarm sound!");
           mqtt.publish("smartalarm/alarm/error", "Failed to play alarm sound");
         }
       }
 
-      // Check if question was answered correctly -> stop alarm
-      if (alarmQuestion.shouldDeactivateAlarm() && audio.playing()) {
-        Serial.println("[Alarm] Question answered correctly - Stopping alarm");
-        audio.stop();
-        mqtt.publish("smartalarm/alarm/deactivated",
-                     "Question answered correctly");
-        alarmQuestion.reset();
+      // Handle alarm question states
+      if (alarmQuestion.isActive()) {
+        // Check timeout (50 seconds no activity)
+        if (alarmQuestion.shouldTimeout()) {
+          Serial.println("[Alarm] Timeout! Counting as wrong attempt");
+          alarmQuestion.setValidationResult(false);  // Mark as wrong
+          alarmQuestion.updateActivity();  // Reset timer
+        }
+        
+        // Update display with current status
+        displayManager.showAlarmQuestion(
+          alarmQuestion.getQuestion(),
+          alarmQuestion.getCurrentAttempt(),
+          alarmQuestion.getMaxAttempts(),
+          alarmQuestion.getStatusMessage()
+        );
+        
+        // Check if should stop alarm
+        if (alarmQuestion.shouldDeactivateAlarm() && audio.playing()) {
+          Serial.println("[Alarm] Question answered correctly - Stopping alarm");
+          audio.stop();
+          mqtt.publish("smartalarm/alarm/deactivated", "Question answered correctly");
+          
+          // Show success message
+          displayManager.showAlarmQuestion(
+            alarmQuestion.getQuestion(),
+            alarmQuestion.getCurrentAttempt(),
+            alarmQuestion.getMaxAttempts(),
+            "CORRECT! ✓"
+          );
+          
+          vTaskDelay(pdMS_TO_TICKS(3000));  // Show for 3 seconds
+          displayManager.returnToNormalDisplay();
+          alarmQuestion.reset();
+        }
+        
+        // Check if failed all attempts
+        if (alarmQuestion.getState() == QUESTION_FAILED && audio.playing()) {
+          Serial.println("[Alarm] Max attempts reached - Stopping alarm");
+          audio.stop();
+          mqtt.publish("smartalarm/alarm/deactivated", "Max attempts reached");
+          
+          // Show failure message
+          displayManager.showAlarmQuestion(
+            alarmQuestion.getQuestion(),
+            alarmQuestion.getCurrentAttempt(),
+            alarmQuestion.getMaxAttempts(),
+            "Max attempts reached"
+          );
+          
+          vTaskDelay(pdMS_TO_TICKS(3000));  // Show for 3 seconds
+          displayManager.returnToNormalDisplay();
+          alarmQuestion.reset();
+        }
+        
+        // Handle button for recording (only during alarm)
+        static bool wasPressed = false;
+        bool isPressed = button.isPressed();
+        
+        if (isPressed && !wasPressed) {
+          // Button just pressed - start recording
+          Serial.println("[Button] Pressed - Starting recording");
+          
+          // Update activity time
+          alarmQuestion.updateActivity();
+          
+          // Turn on LED
+          digitalWrite(2, HIGH);
+          
+          // Reduce volume to 30% during recording
+          audio.setVolume(0.3);
+          
+          // Start recording
+          alarmQuestion.startRecording();
+          audioStream.startRecording();
+          wasPressed = true;
+          
+          // Update display
+          displayManager.showAlarmQuestion(
+            alarmQuestion.getQuestion(),
+            alarmQuestion.getCurrentAttempt(),
+            alarmQuestion.getMaxAttempts(),
+            "Recording..."
+          );
+        } else if (!isPressed && wasPressed) {
+          // Button just released - stop recording
+          Serial.println("[Button] Released - Stopping recording");
+          
+          // Turn off LED
+          digitalWrite(2, LOW);
+          
+          // Restore volume to 100%
+          audio.setVolume(1.0);
+          
+          // Stop recording
+          audioStream.stopRecording();
+          alarmQuestion.stopRecording();
+          wasPressed = false;
+          
+          // Update display
+          displayManager.showAlarmQuestion(
+            alarmQuestion.getQuestion(),
+            alarmQuestion.getCurrentAttempt(),
+            alarmQuestion.getMaxAttempts(),
+            "Validating..."
+          );
+        }
       }
-
-      // Handle button for recording (works anytime)
-      // Press to start, release to stop
-      static bool wasPressed = false;
-      bool isPressed = button.isPressed();
-
-      // Debug output
-      static int debugCounter = 0;
-      if (debugCounter++ % 10 == 0) {
-        Serial.printf("[Button] isPressed: %d, wasPressed: %d\n", isPressed,
-                      wasPressed);
-      }
-
-      if (isPressed && !wasPressed) {
-        // Button just pressed - start recording
-        Serial.println("[Button] Pressed - Starting recording");
-
-        // Turn on LED
-        digitalWrite(2, HIGH);  // LED_PIN = 2
-
-        // Start recording
-        audioStream.startRecording();
-        wasPressed = true;
-      } else if (!isPressed && wasPressed) {
-        // Button just released - stop recording
-        Serial.println("[Button] Released - Stopping recording");
-
-        // Turn off LED
-        digitalWrite(2, LOW);
-
-        // Stop recording
-        audioStream.stopRecording();
-        wasPressed = false;
-      }
-
-      // Still need to call update for gesture processing
-      button.update();
     }
 
     // Check every 100ms for responsive button handling

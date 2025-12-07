@@ -25,12 +25,14 @@ extern bool remoteSensorDataAvailable;
 // MQTT Topics are now included via config.h
 
 void setupMQTT() {
-  wifiClient.setTimeout(3000);  // 3 second timeout for MQTT connections
-  mqttClient.setBufferSize(4200);
+  // Configure MQTT client settings (don't call WiFiClient methods yet)
+  mqttClient.setBufferSize(2048);  // Reduced from 4200 to save memory
+  mqttClient.setKeepAlive(60);  // Reduce keep-alive interval
+  mqttClient.setSocketTimeout(5);  // Socket timeout in seconds
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
 
   mqtt.begin(&mqttClient, MQTT_CLIENT_ID, MQTT_TOPIC_STATUS);
-  Serial.println("[MQTT] Client configured with 4200 byte buffer");
+  Serial.println("[MQTT] Client configured with 2048 byte buffer");
 
   // Try an immediate connection if WiFi is already up. This gives faster
   // feedback on startup instead of waiting for the MQTT task's reconnect

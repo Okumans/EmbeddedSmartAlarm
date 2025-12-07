@@ -5,6 +5,8 @@
 #include <FS.h>
 #include <SD.h>
 #include <SPI.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 // SD Card Pins
 #define SD_CS_PIN 5
@@ -19,6 +21,7 @@ class SDManager {
   // Hardware Init
   bool begin(int maxRetries = 1);
   bool isReady();
+  bool checkAndRemount();  // Auto-remount if SD card failed
 
   // File Writing (For MQTT Uploads)
   bool openForWrite(const char* filename);
@@ -38,6 +41,13 @@ class SDManager {
   bool _ready;
   File _file;               // Current active file for writing
   size_t _bytesSinceFlush;  // For efficient flushing
+  SemaphoreHandle_t _mutex; // Protect SD access
+  uint8_t _errorCount;      // Track consecutive errors
+  unsigned long _lastErrorTime;
+  
+  bool _lock(uint32_t timeout_ms = 1000);
+  void _unlock();
+  bool _reinitialize();     // Try to recover SD card
 };
 
 #endif  // SD_MANAGER_H

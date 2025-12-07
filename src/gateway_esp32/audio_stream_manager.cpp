@@ -82,6 +82,10 @@ bool AudioStreamManager::connectWebSocket() {
     return true;
   }
 
+  // Ensure clean state - disconnect any lingering connection
+  webSocket.disconnect();
+  delay(100);
+
   Serial.printf("[AudioStream] Connecting to WebSocket %s:%d\n",
                 serverIP.c_str(), serverPort);
 
@@ -109,6 +113,7 @@ void AudioStreamManager::disconnectWebSocket() {
   if (wsConnected) {
     webSocket.disconnect();
     wsConnected = false;
+    delay(50);  // Give time for proper cleanup
     Serial.println("[AudioStream] WebSocket disconnected");
   }
 }

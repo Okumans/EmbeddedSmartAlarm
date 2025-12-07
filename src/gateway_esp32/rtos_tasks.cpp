@@ -15,6 +15,7 @@
 #include "../../include/shared/mqtt_time.h"
 #include "../../include/shared/sensor_data.h"
 #include "../../include/shared/time_sync.h"
+#include "../../include/shared/validation_state.h"
 
 // External references to global objects (from main.cpp)
 extern AudioManager audio;
@@ -300,6 +301,7 @@ void alarmTask(void* parameter) {
         // Play alarm sound at 100% volume
         audio.setVolume(1.0);
         String soundFile = alarmManager.getAlarmSound();
+
         if (audio.playFile(soundFile.c_str())) {
           Serial.printf("[Alarm] Playing alarm sound: %s\n", soundFile.c_str());
           mqtt.publish("smartalarm/alarm/triggered",
@@ -312,6 +314,9 @@ void alarmTask(void* parameter) {
           // Notify external system that alarm is playing
           String statusPayload = String("off|") + matchedAlarm;
           mqtt.publish("smartalarm/alarmstatus", statusPayload);
+
+          Serial.printf("Sending alarm status with %s\n", statusPayload);
+
         } else {
           Serial.println("[Alarm] ERROR: Failed to play alarm sound!");
           mqtt.publish("smartalarm/alarm/error", "Failed to play alarm sound");
@@ -479,26 +484,27 @@ void alarmTask(void* parameter) {
           audioStream.stopRecording();
           alarmQuestion.stopRecording();
 
-          // Resume playback if we stopped it earlier
+          // Resume playback if we stopped it earlier, but play at low volume
+          // (0.1) while we await validation. Store previous volume and the
+          // resume filename in shared state so the MQTT handler can act when
+          // validation arrives.
           if (!audio.playing()) {
             String resumeFile = sessionSoundFile.length() > 0
                                     ? sessionSoundFile
                                     : alarmManager.getAlarmSound();
             if (resumeFile.length() > 0) {
-              Serial.printf("[Button] Resuming playback: %s\n",
+              Serial.printf("[Button] Resuming playback (low vol): %s\n",
                             resumeFile.c_str());
               audio.playFile(resumeFile.c_str());
+              // Save resume file to shared state
+              awaitingResumeFile = resumeFile;
             }
           }
 
-          // Fade volume back up to full (resume playback audibly)
-          float targetVol = 1.0;
-          Serial.println("[Button] Fading volume up to resume playback");
-          for (float v = 0.0; v < targetVol - 0.01; v += 0.1) {
-            audio.setVolume(v);
-            vTaskDelay(pdMS_TO_TICKS(50));
-          }
-          audio.setVolume(targetVol);
+          // Lower volume to 0.1 while waiting for validation
+          awaitingPrevVolume = audio.getVolume();
+          audio.setVolume(0.1);
+          awaitingValidation = true;
           wasPressed = false;
 
           // Update display

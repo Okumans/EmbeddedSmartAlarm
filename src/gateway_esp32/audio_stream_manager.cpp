@@ -1,5 +1,7 @@
 #include "gateway_esp32/audio_stream_manager.h"
 
+#include "../../include/gateway_esp32/alarm_question_handler.h"
+
 // Static instance pointer for WebSocket callback
 static AudioStreamManager* instancePtr = nullptr;
 
@@ -7,7 +9,9 @@ AudioStreamManager::AudioStreamManager()
     : recording(false),
       i2sInitialized(false),
       wsConnected(false),
-      serverPort(0) {
+      serverPort(0),
+      pendingQuestion(false),
+      pendingQuestionText("") {
   instancePtr = this;
 }
 
@@ -141,6 +145,39 @@ bool AudioStreamManager::startRecording() {
 
   recording = true;
   Serial.println("[AudioStream] Recording started");
+  // Prepare question text to send as the FIRST TEXT message over WebSocket.
+  // The protocol requires: first message = plain TEXT question (UTF-8,
+  // max 128 bytes). Subsequent messages are binary audio frames.
+  extern AlarmQuestionHandler alarmQuestion;
+  String question = alarmQuestion.getQuestion();
+  // Truncate safely to 128 bytes (preserve UTF-8 sequences)
+  String questionTrunc = truncateUtf8(question, 128);
+
+  // Make sure the stored/displayed question matches the text we will send.
+  // Update the alarmQuestion if truncation changed the text so OLED and
+  // validation service see the exact same string.
+  if (questionTrunc != question) {
+    Serial.printf(
+        "[AudioStream] Truncating question for WS/display: '%s' -> '%s'\n",
+        question.c_str(), questionTrunc.c_str());
+    alarmQuestion.setQuestion(questionTrunc);
+  }
+
+  // If already connected, send immediately; otherwise buffer and send on
+  // connect event.
+  pendingQuestion = true;
+  pendingQuestionText = questionTrunc;
+  if (wsConnected) {
+    webSocket.sendTXT(pendingQuestionText);
+    Serial.printf("[AudioStream] Sent question TEXT: %s\n",
+                  pendingQuestionText.c_str());
+    pendingQuestion = false;
+    pendingQuestionText = "";
+  } else {
+    Serial.printf(
+        "[AudioStream] Buffered question (will send on connect): %s\n",
+        pendingQuestionText.c_str());
+  }
   return true;
 }
 
@@ -227,6 +264,17 @@ void AudioStreamManager::webSocketEvent(WStype_t type, uint8_t* payload,
     case WStype_CONNECTED:
       Serial.printf("[AudioStream] WebSocket connected to: %s\n", payload);
       instancePtr->wsConnected = true;
+      // If we have a buffered question waiting, send it as the first text
+      // message per protocol.
+      if (instancePtr->pendingQuestion &&
+          instancePtr->pendingQuestionText.length() > 0) {
+        instancePtr->webSocket.sendTXT(instancePtr->pendingQuestionText);
+        Serial.printf(
+            "[AudioStream] Sent buffered question TEXT on connect: %s\n",
+            instancePtr->pendingQuestionText.c_str());
+        instancePtr->pendingQuestion = false;
+        instancePtr->pendingQuestionText = "";
+      }
       break;
 
     case WStype_TEXT:
@@ -244,4 +292,36 @@ void AudioStreamManager::webSocketEvent(WStype_t type, uint8_t* payload,
     default:
       break;
   }
+}
+
+String AudioStreamManager::truncateUtf8(const String& s, size_t maxBytes) {
+  const char* data = s.c_str();
+  size_t len = strlen(data);
+  if (len <= maxBytes) return s;
+
+  size_t i = 0;
+  size_t used = 0;
+  while (i < len) {
+    unsigned char c = (unsigned char)data[i];
+    size_t charLen = 1;
+    if ((c & 0x80) == 0x00)
+      charLen = 1;
+    else if ((c & 0xE0) == 0xC0)
+      charLen = 2;
+    else if ((c & 0xF0) == 0xE0)
+      charLen = 3;
+    else if ((c & 0xF8) == 0xF0)
+      charLen = 4;
+    else
+      charLen = 1;  // fallback
+
+    if (used + charLen > maxBytes) break;
+    used += charLen;
+    i += charLen;
+  }
+
+  String out = String(data).substring(0, used);
+  Serial.printf("[AudioStream] Question truncated to %u bytes\n",
+                (unsigned)used);
+  return out;
 }

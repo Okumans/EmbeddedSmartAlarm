@@ -28,7 +28,7 @@ static const char* MQTT_CLIENT_ID = "SmartAlarmClock";
 
 // Audio streaming configuration
 static const char* AUDIO_SERVER_IP =
-    "172.20.10.3";  // Python server IP (update to your computer's IP)
+    "172.20.10.4";  // Python server IP (update to your computer's IP)
 static const int AUDIO_SERVER_PORT = 4000;
 
 // Alarm configuration

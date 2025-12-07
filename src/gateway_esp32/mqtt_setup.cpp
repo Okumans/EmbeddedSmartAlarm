@@ -228,6 +228,36 @@ void setupMQTTHandlers() {
 
         Serial.printf("[MQTT] Answer validation: %s (%s)\n", result.c_str(),
                       isCorrect ? "CORRECT" : "WRONG");
+
+        // If we were awaiting validation (low-volume playback), stop the
+        // waiting audio and play the appropriate result file at full volume.
+        extern AudioManager audio;
+        extern AudioStreamManager audioStream;
+        extern bool awaitingValidation;
+        extern String awaitingResumeFile;
+        extern float awaitingPrevVolume;
+
+        if (awaitingValidation) {
+          Serial.println(
+              "[MQTT] Received validation while awaiting - playing result");
+          awaitingValidation = false;
+
+          // Stop any low-volume playback
+          audio.stop();
+
+          // Choose result file
+          const char* good = "/Valid.mp3";
+          const char* bad = "/Invalid.mp3";
+
+          // Play result
+          audio.setVolume(1.0);
+          bool played = audio.playFile(isCorrect ? good : bad);
+          if (!played) {
+            Serial.println("[MQTT] ERROR: Failed to play result file");
+          }
+
+          // Optionally resume previous audio after result (handled elsewhere)
+        }
         return true;
       },
       "AnswerValidation", 100);

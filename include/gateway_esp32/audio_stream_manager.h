@@ -51,6 +51,10 @@ class AudioStreamManager {
   int32_t i2sBuffer[BUFFER_SIZE];
   int16_t audioBuffer[BUFFER_SIZE];
 
+  // Pending question metadata to send as first WS TEXT message
+  bool pendingQuestion;
+  String pendingQuestionText;
+
   // Private methods
   bool initI2S();
   void deinitI2S();
@@ -61,6 +65,10 @@ class AudioStreamManager {
 
   // WebSocket event handler
   static void webSocketEvent(WStype_t type, uint8_t* payload, size_t length);
+
+  // Helper: truncate UTF-8 string to maxBytes without breaking multi-byte
+  // sequences.
+  String truncateUtf8(const String& s, size_t maxBytes);
 };
 
 #endif  // AUDIO_STREAM_MANAGER_H

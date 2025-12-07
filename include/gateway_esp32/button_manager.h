@@ -29,6 +29,9 @@ class ButtonManager {
   void setDebounceTime(unsigned long ms) { debounceTime = ms; }
   void setDoubleClickTime(unsigned long ms) { doubleClickTime = ms; }
   void setLongPressTime(unsigned long ms) { longPressTime = ms; }
+  // Separate debounce time to ignore very short releases (useful during
+  // long-press when mechanical contacts may briefly open).
+  void setReleaseDebounceTime(unsigned long ms) { releaseDebounceTime = ms; }
 
  private:
   // Pin configuration
@@ -36,9 +39,10 @@ class ButtonManager {
   bool activeHigh;
 
   // Timing configuration
-  unsigned long debounceTime = 30;      // ms
-  unsigned long doubleClickTime = 350;  // ms
-  unsigned long longPressTime = 800;    // ms
+  unsigned long debounceTime = 30;         // ms
+  unsigned long doubleClickTime = 350;     // ms
+  unsigned long longPressTime = 800;       // ms
+  unsigned long releaseDebounceTime = 80;  // ms - ignore very short releases
 
   // Debounce state
   int lastRaw = HIGH;

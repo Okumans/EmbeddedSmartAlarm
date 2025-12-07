@@ -9,9 +9,9 @@ void ButtonManager::begin() {
   } else {
     pinMode(buttonPin, INPUT_PULLUP);  // Internal pull-up
   }
-  
-  Serial.printf("[Button] Initialized on pin %d (Active %s)\n",
-                buttonPin, activeHigh ? "HIGH" : "LOW");
+
+  Serial.printf("[Button] Initialized on pin %d (Active %s)\n", buttonPin,
+                activeHigh ? "HIGH" : "LOW");
 }
 
 ButtonGesture ButtonManager::update() {
@@ -21,13 +21,32 @@ ButtonGesture ButtonManager::update() {
   int raw = digitalRead(buttonPin);
   bool rawPressed = (activeHigh ? (raw == HIGH) : (raw == LOW));
 
-  // Debounce
+  // Debounce: require raw to be stable for `debounceTime` before accepting
+  // a change. This avoids flicker. Additionally, when a long press has
+  // already been emitted, ignore very short release candidates (e.g. brief
+  // mechanical openings) shorter than `releaseDebounceTime` so the long
+  // press isn't accidentally treated as a release.
   if (raw != lastRaw) {
     lastBounceTime = millis();
   }
 
+  bool candidatePressed = stablePressed;  // default to current
   if ((millis() - lastBounceTime) > debounceTime) {
-    stablePressed = rawPressed;
+    candidatePressed = rawPressed;
+  }
+
+  if (candidatePressed != stablePressed) {
+    // If we're seeing a release candidate while a long-press was emitted,
+    // ignore it unless it has been stable for `releaseDebounceTime`.
+    if (!candidatePressed && longPressEmitted) {
+      if ((millis() - lastBounceTime) > releaseDebounceTime) {
+        stablePressed = candidatePressed;
+      } else {
+        // treat as still pressed (ignore brief release)
+      }
+    } else {
+      stablePressed = candidatePressed;
+    }
   }
 
   lastRaw = raw;
@@ -78,8 +97,7 @@ ButtonGesture ButtonManager::update() {
   }
 
   // Check if single-click timeout expired
-  if (waitingForSecondClick &&
-      (millis() - lastReleaseTime > doubleClickTime)) {
+  if (waitingForSecondClick && (millis() - lastReleaseTime > doubleClickTime)) {
     detectedGesture = GESTURE_SINGLE_CLICK;
     waitingForSecondClick = false;
   }

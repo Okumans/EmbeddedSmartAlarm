@@ -294,7 +294,8 @@ void alarmTask(void* parameter) {
         // NOTE: Do NOT start microphone streaming here. The microphone will be
         // initialized only when the user presses the button to answer. This
         // keeps the alarm sound playing uninterrupted until the user requests
-        // to record (avoids early mic initialization failures reported earlier).
+        // to record (avoids early mic initialization failures reported
+        // earlier).
 
         // Play alarm sound at 100% volume
         audio.setVolume(1.0);

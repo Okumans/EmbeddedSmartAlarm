@@ -13,6 +13,7 @@
 #include "../../include/gateway_esp32/sensor_manager.h"
 #include "../../include/shared/config.h"
 #include "../../include/shared/mqtt_time.h"
+#include "../../include/shared/result_state.h"
 #include "../../include/shared/sensor_data.h"
 #include "../../include/shared/time_sync.h"
 #include "../../include/shared/validation_state.h"
@@ -348,6 +349,21 @@ void alarmTask(void* parameter) {
 
         // Check if should stop alarm
         if (alarmQuestion.shouldDeactivateAlarm() && audio.playing()) {
+          // If a result audio was started, wait briefly so the result audio
+          // (e.g. Valid.mp3) won't be cut off by stopping the alarm playback.
+          extern volatile bool resultPlaying;
+          if (resultPlaying) {
+            Serial.println(
+                "[Alarm] Result playback active - waiting up to 5s before "
+                "stopping alarm");
+            unsigned long startWait = millis();
+            while (resultPlaying && (millis() - startWait) < 5000) {
+              vTaskDelay(pdMS_TO_TICKS(100));
+            }
+            Serial.println(
+                "[Alarm] Proceeding to stop alarm after result playback wait");
+          }
+
           Serial.println(
               "[Alarm] Question answered correctly - Stopping alarm");
           audio.stop();
@@ -377,6 +393,10 @@ void alarmTask(void* parameter) {
           if (q.length() > 0) {
             questionManager.removeQuestion(q);
           }
+
+          // Notify external service (LINE) to send a notification
+          mqtt.publish("smartalarm/sendLINE", "send");
+
           alarmQuestion.reset();
         }
 

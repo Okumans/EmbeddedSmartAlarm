@@ -254,6 +254,13 @@ void setupMQTTHandlers() {
           bool played = audio.playFile(isCorrect ? good : bad);
           if (!played) {
             Serial.println("[MQTT] ERROR: Failed to play result file");
+          } else {
+            // Mark that a result file is playing so other logic (alarm stop)
+            // can defer stopping the result until it finishes.
+            extern volatile bool resultPlaying;
+            resultPlaying = true;
+            Serial.println(
+                "[MQTT] Result playback started, resultPlaying=true");
           }
 
           // Optionally resume previous audio after result (handled elsewhere)

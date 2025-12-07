@@ -7,6 +7,7 @@
 
 #include "../../include/gateway_esp32/mqtt_manager.h"
 #include "../../include/gateway_esp32/sd_manager.h"
+#include "../../include/shared/result_state.h"
 
 // ---------------- MQTT TOPICS ----------------
 #include "../../include/shared/config.h"
@@ -205,6 +206,13 @@ void AudioManager::loop() {
         if (mqttManager) {
           mqttManager->publish(TOPIC_STATUS, "finished");
           Serial.println("[Audio] Published 'finished' status");
+        }
+        // If a result playback was in progress, clear the flag so other
+        // components (alarm task) can resume normal behavior.
+        if (resultPlaying) {
+          resultPlaying = false;
+          Serial.println(
+              "[Audio] Result playback finished, resultPlaying=false");
         }
       }
     } else {

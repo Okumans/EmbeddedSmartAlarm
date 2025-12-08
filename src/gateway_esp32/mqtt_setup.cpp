@@ -249,16 +249,22 @@ void setupMQTTHandlers() {
           const char* good = "/Valid.mp3";
           const char* bad = "/Invalid.mp3";
 
+          // Mark that a result file will be played so the alarm task can
+          // observe this state before we actually start playback. This
+          // reduces a race where the alarm task stops playback immediately
+          // after the result starts.
+          extern volatile bool resultPlaying;
+          resultPlaying = true;
+
           // Play result
           audio.setVolume(1.0);
           bool played = audio.playFile(isCorrect ? good : bad);
           if (!played) {
+            // If playback failed, clear the flag so other logic doesn't wait
+            // indefinitely.
+            resultPlaying = false;
             Serial.println("[MQTT] ERROR: Failed to play result file");
           } else {
-            // Mark that a result file is playing so other logic (alarm stop)
-            // can defer stopping the result until it finishes.
-            extern volatile bool resultPlaying;
-            resultPlaying = true;
             Serial.println(
                 "[MQTT] Result playback started, resultPlaying=true");
           }

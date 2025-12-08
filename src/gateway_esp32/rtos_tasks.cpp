@@ -403,6 +403,20 @@ void alarmTask(void* parameter) {
         // Check if failed all attempts
         if (alarmQuestion.getState() == QUESTION_FAILED && audio.playing()) {
           Serial.println("[Alarm] Max attempts reached - Stopping alarm");
+          // If a result audio is playing, wait briefly so we don't cut it off.
+          extern volatile bool resultPlaying;
+          if (resultPlaying) {
+            Serial.println(
+                "[Alarm] Result playback active - waiting up to 5s before "
+                "stopping alarm (guard)");
+            unsigned long startWait = millis();
+            while (resultPlaying && (millis() - startWait) < 5000) {
+              vTaskDelay(pdMS_TO_TICKS(100));
+            }
+            Serial.println(
+                "[Alarm] Proceeding to stop alarm after result playback wait "
+                "(guard)");
+          }
           audio.stop();
           mqtt.publish("smartalarm/alarm/deactivated", "Max attempts reached");
 
@@ -465,6 +479,18 @@ void alarmTask(void* parameter) {
             // Stop playback to release I2S output if necessary
             if (sessionSoundFile.length() > 0) {
               Serial.println("[Button] Stopping playback to allow mic init");
+              // If a result is playing, avoid stopping playback immediately
+              // since that could cut the result. Wait briefly up to 5s.
+              extern volatile bool resultPlaying;
+              if (resultPlaying) {
+                Serial.println(
+                    "[Button] Result playback active - delaying stop up to 5s");
+                unsigned long startWait = millis();
+                while (resultPlaying && (millis() - startWait) < 5000) {
+                  vTaskDelay(pdMS_TO_TICKS(50));
+                }
+                Serial.println("[Button] Proceeding to stop playback (guard)");
+              }
               audio.stop();
             }
           } else {

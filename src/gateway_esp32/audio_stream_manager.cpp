@@ -11,7 +11,8 @@ AudioStreamManager::AudioStreamManager()
       wsConnected(false),
       serverPort(0),
       pendingQuestion(false),
-      pendingQuestionText("") {
+      pendingQuestionText(""),
+      questionSentForConnection(false) {
   instancePtr = this;
 }
 
@@ -173,6 +174,7 @@ bool AudioStreamManager::startRecording() {
                   pendingQuestionText.c_str());
     pendingQuestion = false;
     pendingQuestionText = "";
+    questionSentForConnection = true;
   } else {
     Serial.printf(
         "[AudioStream] Buffered question (will send on connect): %s\n",
@@ -210,6 +212,19 @@ void AudioStreamManager::process() {
   if (!wsConnected) {
     Serial.println("[AudioStream] WebSocket disconnected during recording");
     stopRecording();
+    return;
+  }
+
+  // Ensure we've sent the required per-connection question TEXT before
+  // emitting any binary audio frames on this connection. If not yet sent,
+  // skip this iteration to give the CONNECTED handler time to transmit it.
+  if (!questionSentForConnection) {
+    static bool warned = false;
+    if (!warned) {
+      Serial.println(
+          "[AudioStream] Waiting to send audio until question TEXT is sent for this connection");
+      warned = true;
+    }
     return;
   }
 
@@ -259,21 +274,47 @@ void AudioStreamManager::webSocketEvent(WStype_t type, uint8_t* payload,
     case WStype_DISCONNECTED:
       Serial.println("[AudioStream] WebSocket disconnected");
       instancePtr->wsConnected = false;
+      instancePtr->questionSentForConnection = false;
       break;
 
     case WStype_CONNECTED:
       Serial.printf("[AudioStream] WebSocket connected to: %s\n", payload);
       instancePtr->wsConnected = true;
-      // If we have a buffered question waiting, send it as the first text
-      // message per protocol.
-      if (instancePtr->pendingQuestion &&
-          instancePtr->pendingQuestionText.length() > 0) {
+      // If we are currently recording, ensure the server receives the
+      // per-connection TEXT question before any binary frames. Send the
+      // current question (truncate safely) now so a reconnect during
+      // recording doesn't result in the server receiving audio frames
+      // without the required leading TEXT message.
+      if (instancePtr->recording) {
+        extern AlarmQuestionHandler alarmQuestion;
+        String q = alarmQuestion.getQuestion();
+        String qTrunc = instancePtr->truncateUtf8(q, 128);
+        if (qTrunc != q) {
+          alarmQuestion.setQuestion(qTrunc);
+        }
+        instancePtr->webSocket.sendTXT(qTrunc);
+        Serial.printf(
+            "[AudioStream] Sent question TEXT on reconnect while recording: %s\n",
+            qTrunc.c_str());
+        instancePtr->questionSentForConnection = true;
+        // Clear any buffered question since we've just sent the canonical one
+        instancePtr->pendingQuestion = false;
+        instancePtr->pendingQuestionText = "";
+      } else if (instancePtr->pendingQuestion &&
+                 instancePtr->pendingQuestionText.length() > 0) {
+        // Not recording but had a pending question (record started before
+        // connect finished). Send that buffered question now.
         instancePtr->webSocket.sendTXT(instancePtr->pendingQuestionText);
         Serial.printf(
             "[AudioStream] Sent buffered question TEXT on connect: %s\n",
             instancePtr->pendingQuestionText.c_str());
         instancePtr->pendingQuestion = false;
         instancePtr->pendingQuestionText = "";
+        instancePtr->questionSentForConnection = true;
+      } else {
+        // Nothing to send now; mark as not-yet-sent so future reconnects will
+        // trigger resend if recording begins.
+        instancePtr->questionSentForConnection = false;
       }
       break;
 

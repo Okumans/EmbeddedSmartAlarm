@@ -54,6 +54,10 @@ class AudioStreamManager {
   // Pending question metadata to send as first WS TEXT message
   bool pendingQuestion;
   String pendingQuestionText;
+  // Whether we've sent the per-connection question text on the current WS
+  // connection. Guarantees that the server receives the TEXT question before
+  // any binary audio frames for this connection.
+  bool questionSentForConnection;
 
   // Private methods
   bool initI2S();
